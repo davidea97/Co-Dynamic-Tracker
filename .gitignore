@@ -1,0 +1,8 @@
+checkpoints/
+detected_dynamic_keypoints/
+detected_keypoints/
+global_point_cloud.ply
+output_masks/
+sam2_rgb_jpg/
+sam2/
+sam2_tracker.py
