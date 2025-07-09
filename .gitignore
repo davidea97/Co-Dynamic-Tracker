@@ -6,3 +6,6 @@ output_masks/
 sam2_rgb_jpg/
 sam2/
 sam2_tracker.py
+
+*.pyc
+__pycache__/

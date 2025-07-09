@@ -2,7 +2,6 @@ import os
 import cv2
 import numpy as np
 from sklearn.cluster import DBSCAN
-from collections import defaultdict
 
 from collections import defaultdict
 import numpy as np
