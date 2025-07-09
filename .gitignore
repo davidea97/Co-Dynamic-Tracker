@@ -9,3 +9,4 @@ sam2_tracker.py
 
 *.pyc
 __pycache__/
+dynamic_static_visualization/

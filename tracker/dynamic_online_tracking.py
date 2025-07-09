@@ -7,7 +7,8 @@ from tqdm import tqdm
 from cotracker.utils.visualizer import Visualizer
 import time
 from collections import defaultdict
-
+import os
+import cv2
 
 class OnlineDynamicTracker():
     def __init__(self, intrinsics=None, grid_size=30, checkpoint="scaled_online.pth"):
@@ -45,7 +46,73 @@ class OnlineDynamicTracker():
             grid_query_frame=grid_query_frame,
         )
     
+    def save_dynamic_static_visualization(self, window_rgb_images, pred_tracks, per_frame_dynamic, per_frame_static, output_dir="dynamic_static_visualization", start_frame_idx=0, window_len=8):
+
+        os.makedirs(output_dir, exist_ok=True)
+        tracks_2d = pred_tracks[0].cpu().numpy()  # [T, N, 2]
+
+        for t, img in enumerate(window_rgb_images):
+            img_out = img.copy()
+            frame_idx = t
+
+            # Disegna i punti statici in verde
+            for (n, _, _) in per_frame_static.get(frame_idx, []):
+                x, y = tracks_2d[t, n]
+                cv2.circle(img_out, (int(x), int(y)), 2, (0, 255, 0), -1)  # Verde
+
+            # Disegna i punti dinamici in rosso
+            for (n, _, _, _) in per_frame_dynamic.get(frame_idx, []):
+                x, y = tracks_2d[t, n]
+                cv2.circle(img_out, (int(x), int(y)), 2, (255, 0, 0), -1)  # Rosso
+
+            filename = os.path.join(output_dir, f"frame_{start_frame_idx*window_len + t:04d}.png")
+            cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
+
+
+    def get_window_dynamic_3d_points(self, pred_3d_tracks):
+        track_3d = defaultdict(list)
+        frame_map = defaultdict(list)
+
+        for t, keypoints in pred_3d_tracks.items():
+            for n, point in keypoints:
+                track_3d[n].append(point)
+                frame_map[n].append(t)  
+
+        # Output per frame
+        per_frame_static = defaultdict(list)
+        per_frame_dynamic = defaultdict(list)
+        # raw_dynamic_by_window = defaultdict(list)
+
+        # SINGULAR TEMPORAL CHECKING
+        for n, track in track_3d.items():
+            track_array = np.array(track)
+            center = np.median(track_array, axis=0)
+            spread = np.median(np.linalg.norm(track_array - center, axis=1))
+
+            diffs = np.linalg.norm(np.diff(track_array, axis=0), axis=1)
+            if len(diffs) < 2:
+                for point, t in zip(track, frame_map[n]):
+                    per_frame_static[t].append((n, point, spread))
+                continue
+
+            max_jump = np.max(diffs)
+            jump_threshold = 0.05
+            is_dynamic = False if max_jump > 2 * jump_threshold else spread > 0.03
+
+            for point, t in zip(track, frame_map[n]):
+                if is_dynamic:
+                    per_frame_dynamic[t].append((n, point, spread, t))
+                else:
+                    per_frame_static[t].append((n, point, spread))
+
+        return per_frame_dynamic, per_frame_static
+
     def get_3D_points(self, window_rgb_images, window_depth_images, window_camera_poses, window_tracks):
+        """
+        Pred tracks 3D are in the format 
+        {t: [(track_id, (X, Y, Z)), ...], ...}
+        where t is the frame index, track_id is the id of the track, and (X, Y, Z) are the 3D coordinates in the world frame.
+        """
         pred_3d_tracks = {}
         tracks2d = window_tracks[0].cpu().numpy()
         
@@ -89,7 +156,7 @@ class OnlineDynamicTracker():
 
         return pred_3d_tracks
 
-    def window_dynamic_tracking_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_len=8):
+    def window_dynamic_tracking_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_len=8, window_counter=0):
         self._process_step(  
             window_rgb_images,
             is_first_step=True,
@@ -111,13 +178,16 @@ class OnlineDynamicTracker():
             pred_tracks
         )
 
+        per_frame_dynamic, per_frame_static = self.get_window_dynamic_3d_points(pred_3d_tracks)
+        self.save_dynamic_static_visualization(window_rgb_images, pred_tracks, per_frame_dynamic, per_frame_static, start_frame_idx=window_counter, window_len=window_len)
         return pred_tracks, pred_visibility, pred_3d_tracks
     
+
     def full_online_dynamic_tracking(self, rgb_images, depth_images, camera_poses, window_len=8):
 
         self.global_tracks = []
         self.global_visibilities = []
-
+        window_counter = 0
         for i in tqdm(range(0, len(rgb_images))):
             if i % window_len == 0 and i != 0:
                 
@@ -125,8 +195,10 @@ class OnlineDynamicTracker():
                     self.window_frames[i - window_len:i],
                     depth_images[i - window_len:i],
                     camera_poses[i - window_len:i],
-                    window_len=window_len
+                    window_len=window_len,
+                    window_counter=window_counter
                 )
+                window_counter += 1
 
                 self.global_tracks.append(pred_tracks[0])  # Keep only second half
                 self.global_visibilities.append(pred_visibility[0])
@@ -134,12 +206,15 @@ class OnlineDynamicTracker():
             self.window_frames.append(rgb_images[i])
 
         # This handles the case where the last window is not prcocessed yet
+        
         pred_tracks, pred_visibility, _ = self.window_dynamic_tracking_process(
             self.window_frames[-window_len:],
             depth_images[-window_len:],
             camera_poses[-window_len:],
-            window_len=window_len
+            window_len=window_len,
+            window_counter=window_counter
         )
+        window_counter += 1
 
         self.global_tracks.append(pred_tracks[0])
         self.global_visibilities.append(pred_visibility[0])
