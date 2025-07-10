@@ -9,6 +9,7 @@ import time
 from collections import defaultdict
 import os
 import cv2
+from tracker.utils.general_utils import compute_velocity
 
 class OnlineDynamicTracker():
     def __init__(self, intrinsics=None, grid_size=30, checkpoint="scaled_online.pth"):
@@ -46,7 +47,7 @@ class OnlineDynamicTracker():
             grid_query_frame=grid_query_frame,
         )
     
-    def save_dynamic_static_visualization(self, window_rgb_images, pred_tracks, per_frame_dynamic, per_frame_static, output_dir="dynamic_static_visualization", start_frame_idx=0, window_len=8):
+    def save_dynamic_static_visualization(self, window_rgb_images, pred_tracks, per_frame_dynamic, per_frame_static, output_dir="dynamic_static_visualization", window_counter=0, window_len=8):
 
         os.makedirs(output_dir, exist_ok=True)
         tracks_2d = pred_tracks[0].cpu().numpy()  # [T, N, 2]
@@ -65,7 +66,7 @@ class OnlineDynamicTracker():
                 x, y = tracks_2d[t, n]
                 cv2.circle(img_out, (int(x), int(y)), 2, (255, 0, 0), -1)  # Rosso
 
-            filename = os.path.join(output_dir, f"frame_{start_frame_idx*window_len + t:04d}.png")
+            filename = os.path.join(output_dir, f"frame_{window_counter*window_len + t:04d}.png")
             cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
 
 
@@ -88,16 +89,23 @@ class OnlineDynamicTracker():
             track_array = np.array(track)
             center = np.median(track_array, axis=0)
             spread = np.median(np.linalg.norm(track_array - center, axis=1))
-
+            speed = compute_velocity(track_array, dt=1.0)
             diffs = np.linalg.norm(np.diff(track_array, axis=0), axis=1)
-            if len(diffs) < 2:
-                for point, t in zip(track, frame_map[n]):
-                    per_frame_static[t].append((n, point, spread))
-                continue
-
-            max_jump = np.max(diffs)
+            max_jump = np.max(diffs) if len(diffs) >= 2 else 0.0
             jump_threshold = 0.05
-            is_dynamic = False if max_jump > 2 * jump_threshold else spread > 0.03
+
+            if len(diffs) < 2:
+                is_dynamic = False
+            elif max_jump > 2 * jump_threshold:
+                is_dynamic = False
+            else:
+                is_dynamic = spread > 0.03
+                # is_dynamic = np.median(speed) > 0.04 #and spread > 0.02
+
+            # if is_dynamic:
+            #     print(f"[Track {n}] Dynamic → spread={spread:.4f} | max_jump={max_jump:.4f} | len={len(track)} | mean speed={np.mean(speed):.4f} | median speed={np.median(speed):.4f}")
+            # else:
+            #     print(f"[Track {n}] Static → spread={spread:.4f} | max_jump={max_jump:.4f} | len={len(track)} | mean speed={np.mean(speed):.4f} | median speed={np.median(speed):.4f}")
 
             for point, t in zip(track, frame_map[n]):
                 if is_dynamic:
@@ -179,7 +187,7 @@ class OnlineDynamicTracker():
         )
 
         per_frame_dynamic, per_frame_static = self.get_window_dynamic_3d_points(pred_3d_tracks)
-        self.save_dynamic_static_visualization(window_rgb_images, pred_tracks, per_frame_dynamic, per_frame_static, start_frame_idx=window_counter, window_len=window_len)
+        self.save_dynamic_static_visualization(window_rgb_images, pred_tracks, per_frame_dynamic, per_frame_static, window_counter=window_counter, window_len=window_len)
         return pred_tracks, pred_visibility, pred_3d_tracks
     
 

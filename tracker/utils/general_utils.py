@@ -15,3 +15,8 @@ def extract_poses(folder):
     files = [np.load(file) for file in files_path]
     return files
 
+def compute_velocity(track_array, dt=1.0):
+    diffs = np.diff(track_array, axis=0)
+    speeds = np.linalg.norm(diffs, axis=1) / dt
+    return speeds
+
