@@ -22,10 +22,10 @@ def main(experiments_path, grid_size, intrinsics, window_len=8, checkpoint="scal
     camera_poses = extract_poses(poses_path) if poses_path else []
 
     start_tracking_time = time.time()
-    tracker = OnlineDynamicTracker(intrinsics, grid_size=grid_size, checkpoint=checkpoint)
+    tracker = OnlineDynamicTracker(intrinsics, grid_size=grid_size, checkpoint=checkpoint, window_len=window_len)
 
     print("Starting tracking...")
-    tracker.full_online_dynamic_tracking(rgb_images, depth_images, camera_poses, window_len=window_len)
+    tracker.full_online_dynamic_tracking(rgb_images, depth_images, camera_poses)
     print(f"Tracking time: {time.time() - start_tracking_time} seconds")
 
     # print("Initial length pred tracks:", len(tracker.pred_tracks[0]))
