@@ -11,7 +11,7 @@ import os
 import cv2
 from tracker.utils.general_utils import compute_velocity
 from tracker.semantic_tracker import SemanticTracker
-from tracker.utils.save_utils import make_video_from_frames
+from tracker.utils.save_utils import make_video_from_frames, save_dynamic_static_visualization, save_refined_dynamic_visualization
 
 class OnlineDynamicTracker():
     def __init__(self, intrinsics=None, grid_size=30, checkpoint="scaled_online.pth", window_len=8):
@@ -49,31 +49,16 @@ class OnlineDynamicTracker():
             grid_size=grid_size,
             grid_query_frame=grid_query_frame,
         )
-    
-    def save_dynamic_static_visualization(self, window_rgb_images, pred_tracks, per_frame_dynamic, per_frame_static, output_dir="output_visualization", window_counter=0):
-
-        os.makedirs(output_dir, exist_ok=True)
-        tracks_2d = pred_tracks[0].cpu().numpy()  # [T, N, 2]
-        window_output_images = []
-        for t, img in enumerate(window_rgb_images):
-            img_out = img.copy()
-            frame_idx = t
-
-            # Disegna i punti statici in verde
-            for (n, _, _, _) in per_frame_static.get(frame_idx, []):
-                x, y = tracks_2d[t, n]
-                cv2.circle(img_out, (int(x), int(y)), 2, (0, 255, 0), -1)  # Verde
-
-            # Disegna i punti dinamici in rosso
-            for (n, _, _, _, _) in per_frame_dynamic.get(frame_idx, []):
-                x, y = tracks_2d[t, n]
-                cv2.circle(img_out, (int(x), int(y)), 2, (255, 0, 0), -1)  # Rosso
-
-            filename = os.path.join(output_dir, f"frame_{window_counter*self.window_len + t:04d}.png")
-            cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
 
 
     def is_dynamic(self, track):
+        """
+        Check if a track is dynamic based on its spread and speed.
+        Returns:
+        - dynamic: True if the track is dynamic, False otherwise
+        - spread: the spread of the track
+        - speed: the speed of the track
+        """
         track_array = np.array(track)
         center = np.median(track_array, axis=0)
         spread = np.median(np.linalg.norm(track_array - center, axis=1))
@@ -92,6 +77,13 @@ class OnlineDynamicTracker():
         return dynamic, spread, speed
     
     def get_dynamic_3D_points(self, pred_3d_tracks):
+        """
+        Process the 3D tracks to identify dynamic and static points.
+        Returns:
+        - per_frame_dynamic: a dictionary mapping frame index to a list of dynamic points
+        - per_frame_static: a dictionary mapping frame index to a list of static points
+        """
+
         track_3d = defaultdict(list)
         frame_map = defaultdict(list)
 
@@ -103,9 +95,8 @@ class OnlineDynamicTracker():
         # Output per frame
         per_frame_static = defaultdict(list)
         per_frame_dynamic = defaultdict(list)
-        # raw_dynamic_by_window = defaultdict(list)
 
-        # SINGULAR TEMPORAL CHECKING
+        # Temporal consistency check
         for n, track in track_3d.items():
             dynamic, spread, speed = self.is_dynamic(track)
 
@@ -168,13 +159,21 @@ class OnlineDynamicTracker():
         return pred_3d_tracks
 
 
-    def get_refined_dynamic_points(self, window_rgb_images, pred_tracks,
+    def get_refined_dynamic_points(self, 
+        window_rgb_images, 
+        pred_tracks,
         per_frame_raw_dynamic,
         per_frame_raw_static,
         window_counter,
         dynamic_threshold=0.5,
         min_points_in_mask=3,
         output_dir="output_masks"):
+        """
+        Refine dynamic points using SAM2 masks.
+        Returns:
+        - refined_points_per_frame: a dictionary mapping frame index to a list of refined dynamic points
+        """
+
         refined_points_per_frame = {}
 
         tracks_2d = pred_tracks[0].cpu().numpy()
@@ -218,16 +217,20 @@ class OnlineDynamicTracker():
         output_dir="output_masks"
     ):
         """
-        Al frame t=0 di una finestra:
-        - Usa i punti dinamici raw come prompt per SAM2.
-        - Per ogni maschera prodotta:
-            - Se > soglia % dei punti interni erano dinamici → TUTTI i punti interni diventano dinamici.
-            - Altrimenti → TUTTI i punti interni diventano statici.
-            - Se la maschera contiene < min_points_in_mask → viene ignorata.
-        
-        Restituisce:
-            - refined_dynamic_ids: set di indici validati come dinamici
-            - refined_points2D: lista di [x, y] dei punti dinamici
+        At frame t=0 of a window:
+        - Use raw dynamic points as prompts for SAM2 to generate masks.
+        - For each generated mask:
+            - If the percentage of dynamic points inside the mask exceeds `dynamic_threshold`:
+                - Retrieve both dynamic and static points within the mask.
+                - Compute mean and standard deviation of spread and speed for dynamic points.
+                - Remove outliers among dynamic points (i.e., those with low speed/spread relative to the mean).
+                - Reclassify static points as dynamic if their speed and spread fall within 1.5 standard deviations from the dynamic mean.
+            - If the number of points inside the mask is less than `min_points_in_mask`, the mask is discarded.
+            - If the dynamic ratio is below the threshold, all points inside the mask are discarded.
+
+        Returns:
+            - refined_dynamic_ids: a set of validated dynamic point indices
+            - refined_points2D: list of [x, y] refined dynamic points (for visualization or tracking)
         """
         points2D = []
         dynamic_ids = []
@@ -241,13 +244,7 @@ class OnlineDynamicTracker():
             return set(), []
 
         # Applica SAM2
-        mask_arrays = mask_generator_fn(
-            image=image,
-            tracks2d=points2D,
-            output_dir=output_dir,
-            window_counter=window_counter,
-            image_counter=frame_idx
-        )
+        mask_arrays = mask_generator_fn(image=image, tracks2d=points2D, output_dir=output_dir, window_counter=window_counter, image_counter=frame_idx)
 
         refined_dynamic_ids = set()
 
@@ -264,14 +261,9 @@ class OnlineDynamicTracker():
             if len(mask_ids_inside) < min_points_in_mask:
                 continue  # scarta maschere troppo piccole
 
-            # Conta quanti di questi erano dinamici
             dynamic_in_mask = [n for n in mask_ids_inside if n in dynamic_ids]
             static_in_mask = [n for n in mask_ids_inside if n not in dynamic_ids]
             ratio_dynamic = len(dynamic_in_mask) / len(mask_ids_inside)
-
-            # if ratio_dynamic >= dynamic_threshold:
-            #     # Promuovi tutti gli ID dentro alla maschera a dinamici
-            #     refined_dynamic_ids.update(mask_ids_inside)
 
             if ratio_dynamic >= dynamic_threshold:
                 dyn_speed_by_id = {n: speed for (n, _, _, speed, _) in per_frame_raw_dynamic.get(frame_idx, []) if n in dynamic_in_mask}
@@ -285,39 +277,32 @@ class OnlineDynamicTracker():
                 if len(dyn_speeds) == 0 or len(dyn_spreads) == 0:
                     continue
 
-                mean_speed = np.mean(dyn_speeds)
-                # std_speed = np.std(dyn_speeds) + 1e-6  # evita divisioni per 0
-                std_spread = max(np.std(dyn_spreads), 0.01)
-                mean_spread = np.mean(dyn_spreads)
-                # std_spread = np.std(dyn_spreads) + 1e-6
-                std_speed = max(np.std(dyn_speeds), 0.01)
-
+                mean_speed = np.median(dyn_speeds)
+                mean_spread = np.median(dyn_spreads)
 
                 for n in mask_ids_inside:
+                    # Remove false positives
                     if n in dynamic_ids and n in dyn_speed_by_id and n in dyn_spread_by_id:
                         speed = dyn_speed_by_id[n]
                         spread = dyn_spread_by_id[n]
-                        # speed_diff = abs(speed - mean_speed)
-                        # spread_diff = abs(spread - mean_spread)
                         if speed > mean_speed/2 and spread > mean_spread/2:
                             refined_dynamic_ids.add(n)
                         else:
                             pass
+
+                    # Refine static points
                     elif n in static_speed_by_id and n in static_spread_by_id:
                         speed = static_speed_by_id[n]
                         spread = static_spread_by_id[n]
 
-                        z_speed = abs((speed - mean_speed) / std_speed)
-                        z_spread = abs((spread - mean_spread) / std_spread)
-
-                        # Accetta candidati che sono entro soglia nelle due metriche
-                        if z_speed <= 1.5 and z_spread <= 1.5:
+                        # Convert static points to dynamic if their speed and spread are at least half of the mean
+                        if speed > mean_speed/2 and spread > mean_spread/2:
                             refined_dynamic_ids.add(n)
             else:
-                # Tutti gli ID nella maschera diventano statici → NON li aggiungiamo
-                pass  # nulla da fare: li escludiamo
+                # All points in the mask are discarded
+                pass 
 
-        # Ricostruisci lista dei punti 2D dinamici raffinati
+        # Convert refined dynamic ids to 2D points
         refined_points2D = []
         for n in refined_dynamic_ids:
             x, y = tracks_2d[frame_idx, n]
@@ -355,55 +340,16 @@ class OnlineDynamicTracker():
             per_frame_raw_dynamic,
             per_frame_raw_static,
             window_counter=window_counter,
-            dynamic_threshold=0.6,
+            dynamic_threshold=0.4,
             min_points_in_mask=4,
             output_dir="output_masks"
         )
 
-        self.save_dynamic_static_visualization(window_rgb_images, pred_tracks, per_frame_raw_dynamic, per_frame_raw_static, window_counter=window_counter)
-        self.save_refined_dynamic_visualization(
-            window_rgb_images,
-            pred_tracks,
-            per_frame_raw_dynamic,
-            refined_points_per_frame,
-            output_dir="output_refined_visualization",
-            window_counter=window_counter
-        )
+        save_dynamic_static_visualization(window_rgb_images, pred_tracks, per_frame_raw_dynamic, per_frame_raw_static, window_counter=window_counter, window_len=self.window_len)
+        save_refined_dynamic_visualization(window_rgb_images, pred_tracks, per_frame_raw_dynamic, refined_points_per_frame, output_dir="output_refined_visualization", window_counter=window_counter, window_len=self.window_len)
 
         return pred_tracks, pred_visibility, pred_3d_tracks
     
-
-    def save_refined_dynamic_visualization(self, window_rgb_images, pred_tracks, per_frame_dynamic, refined_points_per_frame, output_dir="output_refined_visualization", window_counter=0):
-        """
-        - per_frame_dynamic: mappa frame_idx → lista di (n, point3D, spread, t)
-        - refined_points_per_frame: mappa frame_idx → lista di [x, y] refined (2D) points
-        """
-        os.makedirs(output_dir, exist_ok=True)
-        tracks_2d = pred_tracks[0].cpu().numpy()  # [T, N, 2]
-
-        for t, img in enumerate(window_rgb_images):
-            img_out = img.copy()
-            frame_idx = t
-
-            # Punti dinamici raw
-            raw_dynamic = set()
-            for (n, _, _, _,_) in per_frame_dynamic.get(frame_idx, []):
-                raw_dynamic.add(n)
-
-            # Refined dynamic (in blu)
-            refined_pts = refined_points_per_frame.get(frame_idx, [])
-            for pt in refined_pts:
-                x, y = int(pt[0]), int(pt[1])
-                cv2.circle(img_out, (x, y), 2, (255, 0, 0), -1)  # Blu
-
-            # Altri punti → statici (verde)
-            for n in range(tracks_2d.shape[1]):
-                x, y = tracks_2d[t, n]
-                if not any(np.allclose([x, y], rp, atol=1.5) for rp in refined_pts):
-                    cv2.circle(img_out, (int(x), int(y)), 2, (0, 255, 0), -1)  # Verde
-
-            filename = os.path.join(output_dir, f"frame_{window_counter*self.window_len + t:04d}.png")
-            cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
 
     def full_online_dynamic_tracking(self, rgb_images, depth_images, camera_poses):
         
@@ -427,7 +373,6 @@ class OnlineDynamicTracker():
             self.window_frames.append(rgb_images[i])
 
         # This handles the case where the last window is not prcocessed yet
-        
         pred_tracks, pred_visibility, _ = self.window_dynamic_tracking_process(
             self.window_frames[-self.window_len:],
             depth_images[-self.window_len:],

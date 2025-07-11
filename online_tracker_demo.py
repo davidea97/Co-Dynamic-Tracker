@@ -3,7 +3,7 @@ import numpy as np
 import os
 import time
 import sys
-sys.path.append("/home/allegro/davide_ws/co-tracker/sam2")
+sys.path.append("./sam2")
 from sam2_tracker import Sam2Tracker
 from tracker.dynamic_tracker import DynamicTracker
 from tracker.dynamic_online_tracking import OnlineDynamicTracker
@@ -24,54 +24,9 @@ def main(experiments_path, grid_size, intrinsics, window_len=8, checkpoint="scal
     start_tracking_time = time.time()
     tracker = OnlineDynamicTracker(intrinsics, grid_size=grid_size, checkpoint=checkpoint, window_len=window_len)
 
-    print("Starting tracking...")
+    print("Start tracking...")
     tracker.full_online_dynamic_tracking(rgb_images, depth_images, camera_poses)
     print(f"Tracking time: {time.time() - start_tracking_time} seconds")
-
-    # print("Initial length pred tracks:", len(tracker.pred_tracks[0]))
-    pred_tracks = tracker.pred_tracks[0].cpu().numpy()  # Convert to numpy for easier handling
-    pred_visibility = tracker.pred_visibility[0].cpu().numpy()  # Convert to numpy for easier handling
-
-    
-
-    # print("Number of RGB images:", len(rgb_images))
-    # print("Number of Depth images:", len(depth_images))
-
-    dynamic_tracker = DynamicTracker(
-        tracks=pred_tracks,
-        rgb_images=rgb_images,
-        depth_images=depth_images,
-        camera_poses=camera_poses,
-        intrinsics=intrinsics,
-        # start_frame=0,  
-        # end_frame=17 
-        tracker_step_window=tracker.model.step,
-        grid_size=grid_size
-    )
-
-    extract_3d_point_time = time.time()
-    points_3d_world = dynamic_tracker.extract_3D_points(save_detections=False)
-    print(f"Extracting time {time.time()-extract_3d_point_time} sec")
-
-    compute_track_to_grid_index_time = time.time()
-    track_to_grid_index = dynamic_tracker.compute_track_to_grid_index(grid_size=grid_size)
-    print(f"Computing track to grid index time {time.time()-compute_track_to_grid_index_time} sec")
-    # Extract dynamic points
-    # static_points_clust_fin, dynamic_candidates, dynamic_points_clust_fin = dynamic_tracker.extract_dynamic_points_with_clustering_fin(points_3d_world)
-    extract_dynamic_points_time = time.time()
-    static_points, dynamic_points = dynamic_tracker.extract_dynamic_points(points_3d_world, track_to_grid_index)
-    print("Extracting dynamic points time:", time.time() - extract_dynamic_points_time)
-    # static_points_clust_fin, dynamic_points_clust_fin = dynamic_tracker.extract_dynamic_points_generalized(points_3d_world)
-    dynamic_points_per_frame = dynamic_tracker.get_dynamic_points_2d(dynamic_points)
-    
-    # Draw dynamic points on the frames
-    dynamic_tracker.draw_dynamic_points(static_points, dynamic_points, output_path="./detected_dynamic_keypoints")
-
-    # dynamic_tracker.draw_points_by_spread(static_points, dynamic_points, output_path="./detected_dynamic_keypoints_spread")
-
-    # Create sam2tracker  
-    # sam2tracker = Sam2Tracker(rgb_images=rgb_path, tracks=pred_tracks, start_frame=0, end_frame=len(rgb_images), tracker_step_window=tracker.model.step)
-    # sam2tracker.track(dynamic_points_per_frame)
 
 # Main function
 if __name__ == "__main__":
