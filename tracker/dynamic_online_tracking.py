@@ -341,7 +341,7 @@ class OnlineDynamicTracker():
             per_frame_raw_static,
             window_counter=window_counter,
             dynamic_threshold=0.4,
-            min_points_in_mask=4,
+            min_points_in_mask=5,
             output_dir="output_masks"
         )
 
