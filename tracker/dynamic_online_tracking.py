@@ -35,7 +35,7 @@ class OnlineDynamicTracker():
         self.semantic_tracker = SemanticTracker(self.window_len)
         self.window_frames = []
 
-    def _process_step(self, window_frames, is_first_step, grid_size, grid_query_frame):
+    def _process_step(self, window_frames, is_first_step, grid_size, grid_query_frame, queries=None):
         video_chunk = (
             torch.tensor(
                 np.stack(window_frames[-self.model.step * 2 :]), device=self.device
@@ -48,6 +48,7 @@ class OnlineDynamicTracker():
             is_first_step=is_first_step,
             grid_size=grid_size,
             grid_query_frame=grid_query_frame,
+            queries=queries,
         )
 
 
@@ -310,12 +311,13 @@ class OnlineDynamicTracker():
 
         return refined_dynamic_ids, refined_points2D
 
-    def window_dynamic_tracking_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_counter=0):
+    def window_dynamic_tracking_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_counter=0, queries=None):
         self._process_step(  
             window_rgb_images,
             is_first_step=True,
             grid_size=self.grid_size,
             grid_query_frame=self.grid_query_frame,
+            queries=queries
         )
 
         pred_tracks, pred_visibility = self._process_step(  # Tracking
@@ -323,6 +325,7 @@ class OnlineDynamicTracker():
             is_first_step=False,
             grid_size=self.grid_size,
             grid_query_frame=self.grid_query_frame,
+            queries=queries
         )
 
         pred_3d_tracks = self.get_3D_points(
@@ -348,22 +351,35 @@ class OnlineDynamicTracker():
         save_dynamic_static_visualization(window_rgb_images, pred_tracks, per_frame_raw_dynamic, per_frame_raw_static, window_counter=window_counter, window_len=self.window_len)
         save_refined_dynamic_visualization(window_rgb_images, pred_tracks, per_frame_raw_dynamic, refined_points_per_frame, output_dir="output_refined_visualization", window_counter=window_counter, window_len=self.window_len)
 
-        return pred_tracks, pred_visibility, pred_3d_tracks
+        # MEMORY BANK: let's keep only the last frame's refined points
+        last_frame_idx = len(window_rgb_images) - 1
+        last_frame_dynamic = refined_points_per_frame[last_frame_idx]  # lista di [x, y]
+        
+        # If there are no dynamic points in the last frame, we fallback to None
+        if len(last_frame_dynamic) > 0:
+            queries_np = np.array([[0, x, y] for x, y in last_frame_dynamic], dtype=np.float32)
+            queries_tensor = torch.from_numpy(queries_np)[None].to(self.device)  # [1, N, 3]
+        else:
+            queries_tensor = None  # fallback
+
+        return pred_tracks, pred_visibility, pred_3d_tracks, queries_tensor
     
 
     def full_online_dynamic_tracking(self, rgb_images, depth_images, camera_poses):
         
         self.global_tracks = []
         self.global_visibilities = []
+        prev_queries = None
         window_counter = 0
         for i in tqdm(range(0, len(rgb_images))):
             if i % self.window_len == 0 and i != 0:
                 
-                pred_tracks, pred_visibility, _ = self.window_dynamic_tracking_process(
+                pred_tracks, pred_visibility, _, prev_queries  = self.window_dynamic_tracking_process(
                     self.window_frames[i - self.window_len:i],
                     depth_images[i - self.window_len:i],
                     camera_poses[i - self.window_len:i],
-                    window_counter=window_counter
+                    window_counter=window_counter,
+                    queries=prev_queries
                 )
                 window_counter += 1
 
@@ -373,17 +389,19 @@ class OnlineDynamicTracker():
             self.window_frames.append(rgb_images[i])
 
         # This handles the case where the last window is not prcocessed yet
-        pred_tracks, pred_visibility, _ = self.window_dynamic_tracking_process(
+        pred_tracks, pred_visibility, _, _ = self.window_dynamic_tracking_process(
             self.window_frames[-self.window_len:],
             depth_images[-self.window_len:],
             camera_poses[-self.window_len:],
-            window_counter=window_counter
+            window_counter=window_counter,
+            queries=prev_queries
         )
+
         window_counter += 1
 
         self.global_tracks.append(pred_tracks[0])
         self.global_visibilities.append(pred_visibility[0])
 
-        self.pred_tracks = torch.cat(self.global_tracks, dim=0)[None]  # (1, T, N, 2)
-        self.pred_visibility = torch.cat(self.global_visibilities, dim=0)[None]
+        # self.pred_tracks = torch.cat(self.global_tracks, dim=0)[None]  # (1, T, N, 2)
+        # self.pred_visibility = torch.cat(self.global_visibilities, dim=0)[None]
         make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
