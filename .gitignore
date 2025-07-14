@@ -9,6 +9,8 @@ output_masks/
 output_refined_visualization/
 output_visualization/
 refined_full_video.mp4
+refined_masks/
+refined_masks_video/
 
 *.pyc
 __pycache__/

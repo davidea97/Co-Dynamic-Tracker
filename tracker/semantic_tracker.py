@@ -1,7 +1,7 @@
 import torch
 import sys
 sys.path.append("./sam2")
-from sam2.build_sam import build_sam2
+from sam2.build_sam import build_sam2, build_sam2_video_predictor
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
@@ -9,13 +9,18 @@ import cv2
 import numpy as np
 import os
 import random
+from tracker.utils.general_utils import create_temp_video_dir
+import shutil
 
 class SemanticTracker:
     def __init__(self, window_len=8):
         self.checkpoint = "sam2/checkpoints/sam2.1_hiera_large.pt"
         self.model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
-        self.predictor = SAM2ImagePredictor(build_sam2(self.model_cfg, self.checkpoint))
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.predictor = SAM2ImagePredictor(build_sam2(self.model_cfg, self.checkpoint))
+        self.video_predictor = build_sam2_video_predictor(self.model_cfg, self.checkpoint, device=self.device)
+
+        
         self.mask_autmatic_generator = SAM2AutomaticMaskGenerator(build_sam2(self.model_cfg, self.checkpoint, device=self.device, apply_postprocessing=False))
         self.window_len = window_len
 
@@ -36,15 +41,15 @@ class SemanticTracker:
     def mask_generator(self, image, tracks2d, output_dir=None, window_counter=0, image_counter=0):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-                self.predictor.set_image(image_rgb)
-                input_points = np.array(tracks2d)  # [[x1, y1], [x2, y2], ...]
-                input_labels = np.ones(len(input_points), dtype=np.int32)  # tutti foreground
+            self.predictor.set_image(image_rgb)
+            input_points = np.array(tracks2d)  # [[x1, y1], [x2, y2], ...]
+            input_labels = np.ones(len(input_points), dtype=np.int32)  # tutti foreground
 
-                masks, scores, logits = self.predictor.predict(
-                    point_coords=input_points,
-                    point_labels=input_labels,
-                    multimask_output=False,
-                )
+            masks, scores, logits = self.predictor.predict(
+                point_coords=input_points,
+                point_labels=input_labels,
+                multimask_output=False,
+            )
             
         mask_arrays = []
         if output_dir is not None:
@@ -56,3 +61,47 @@ class SemanticTracker:
                 mask_arrays.append(mask.astype(bool))
 
         return mask_arrays
+    
+    def window_mask_generator(self, rgb_images, tracks2d, window_counter, output_dir=None):
+        """
+        Generate masks for a sequence of images based on the provided 2D tracks.
+        """
+        temp_video_dir = create_temp_video_dir(rgb_images)
+
+        inference_state = self.video_predictor.init_state(video_path=temp_video_dir)
+        ann_frame_idx = 0  # the frame index we interact with
+        ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
+
+        input_points = np.array(tracks2d)
+        input_labels = np.ones(len(input_points), dtype=np.int32)
+
+        _, out_obj_ids, out_mask_logits = self.video_predictor.add_new_points_or_box(
+            inference_state=inference_state,
+            frame_idx=ann_frame_idx,
+            obj_id=ann_obj_id,
+            points=input_points,
+            labels=input_labels,
+        )
+
+        video_segments = {}  # video_segments contains the per-frame segmentation results
+        if output_dir is not None:
+            os.makedirs(output_dir, exist_ok=True)
+        image_counter = 0
+        mask_arrays = [None] * len(rgb_images)
+        for out_frame_idx, out_obj_ids, out_mask_logits in self.video_predictor.propagate_in_video(inference_state):
+            frame_masks = {}
+            for i, out_obj_id in enumerate(out_obj_ids):
+                mask = (out_mask_logits[i] > 0.0).cpu().numpy().astype(np.float32)[0]
+
+                mask_np = mask.astype("uint8") * 255
+                out_path = os.path.join(output_dir, f"mask_frame_{window_counter*self.window_len+image_counter:04d}.png")
+                cv2.imwrite(out_path, mask_np)
+            
+            # video_segments[out_frame_idx] = mask
+            mask_arrays[image_counter] = mask.astype(bool)
+            image_counter += 1
+            
+        shutil.rmtree(temp_video_dir)
+        self.video_predictor.reset_state(inference_state)
+        return mask_arrays
+

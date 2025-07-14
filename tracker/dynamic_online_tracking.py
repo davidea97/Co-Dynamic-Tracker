@@ -51,7 +51,6 @@ class OnlineDynamicTracker():
             queries=queries,
         )
 
-
     def is_dynamic(self, track):
         """
         Check if a track is dynamic based on its spread and speed.
@@ -168,7 +167,9 @@ class OnlineDynamicTracker():
         window_counter,
         dynamic_threshold=0.5,
         min_points_in_mask=3,
-        output_dir="output_masks"):
+        output_dir="output_masks"
+        ):
+        
         """
         Refine dynamic points using SAM2 masks.
         Returns:
@@ -178,7 +179,7 @@ class OnlineDynamicTracker():
         refined_points_per_frame = {}
 
         tracks_2d = pred_tracks[0].cpu().numpy()
-
+        
         for t, img in enumerate(window_rgb_images):
             if t == 0:
                 refined_dynamic_ids, refined_points2D = self.refine_single_image_dynamic_points_from_mask(
@@ -204,6 +205,7 @@ class OnlineDynamicTracker():
         return refined_points_per_frame
     
 
+            
     def refine_single_image_dynamic_points_from_mask(
         self,
         image,
@@ -348,24 +350,70 @@ class OnlineDynamicTracker():
             output_dir="output_masks"
         )
 
+
+
         save_dynamic_static_visualization(window_rgb_images, pred_tracks, per_frame_raw_dynamic, per_frame_raw_static, window_counter=window_counter, window_len=self.window_len)
         save_refined_dynamic_visualization(window_rgb_images, pred_tracks, per_frame_raw_dynamic, refined_points_per_frame, output_dir="output_refined_visualization", window_counter=window_counter, window_len=self.window_len)
 
         # MEMORY BANK: let's keep only the last frame's refined points
         last_frame_idx = len(window_rgb_images) - 1
         last_frame_dynamic = refined_points_per_frame[last_frame_idx]  # lista di [x, y]
-        
-        # If there are no dynamic points in the last frame, we fallback to None
-        if len(last_frame_dynamic) > 0:
-            queries_np = np.array([[0, x, y] for x, y in last_frame_dynamic], dtype=np.float32)
-            queries_tensor = torch.from_numpy(queries_np)[None].to(self.device)  # [1, N, 3]
-        else:
-            queries_tensor = None  # fallback
+
+        queries_tensor, final_masks = self.queries_for_next_window(
+            window_rgb_images,
+            refined_points_per_frame,
+            window_counter,
+            last_frame_dynamic
+        )
 
         return pred_tracks, pred_visibility, pred_3d_tracks, queries_tensor
     
 
+    def queries_for_next_window(self, window_rgb_images, refined_points_per_frame, window_counter, last_frame_dynamic):
+        """
+        Prepare queries for the next window based on the refined points from the last frame.
+        Returns:
+        - queries_tensor: a tensor of queries for the next window
+        - final_masks: a list of masks for the last frame
+        """
+
+        final_masks = [None] * len(window_rgb_images)
+
+        if len(refined_points_per_frame[0]) > 0:
+            final_masks = self.semantic_tracker.window_mask_generator(
+                rgb_images=window_rgb_images,
+                tracks2d=refined_points_per_frame[0],
+                window_counter=window_counter,
+                output_dir="refined_masks_video"
+            )
+
+        if len(last_frame_dynamic) > 0:
+            queries_np = np.array([[0, x, y] for x, y in last_frame_dynamic], dtype=np.float32)
+
+            additional_points = []
+            last_mask = final_masks[-1]
+            if last_mask is not None:
+                ys, xs = np.where(last_mask)  
+                coords = np.stack([xs, ys], axis=1)
+
+                num_extra_points = min(40, len(coords))
+                if num_extra_points > 0:
+                    chosen = coords[np.random.choice(len(coords), size=num_extra_points, replace=False)]
+                    additional_points = [[0, float(x), float(y)] for x, y in chosen]
+
+            additional_points = np.array(additional_points, dtype=np.float32).reshape(-1, 3)
+            all_queries_np = np.concatenate([queries_np, np.array(additional_points, dtype=np.float32)], axis=0)
+            queries_tensor = torch.from_numpy(all_queries_np)[None].to(self.device)
+        else:
+            queries_tensor = None  # fallback
+
+        return queries_tensor, final_masks
+    
     def full_online_dynamic_tracking(self, rgb_images, depth_images, camera_poses):
+        """
+        Process a sequence of RGB images, depth images, and camera poses for dynamic tracking.
+        This method processes the images in windows, tracking dynamic objects and refining their points.
+        """
         
         self.global_tracks = []
         self.global_visibilities = []
