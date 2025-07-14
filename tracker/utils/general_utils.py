@@ -33,3 +33,4 @@ def create_temp_video_dir(subset_images, temp_dir="temp_video_dir"):
         cv2.imwrite(str(out_path), img)
 
     return temp_dir
+

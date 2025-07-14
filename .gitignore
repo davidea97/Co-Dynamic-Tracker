@@ -11,6 +11,9 @@ output_visualization/
 refined_full_video.mp4
 refined_masks/
 refined_masks_video/
+merged_pcl/
+merged_object.ply
+merged_ransac_pcl/
 
 *.pyc
 __pycache__/
