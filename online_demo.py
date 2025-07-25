@@ -76,7 +76,6 @@ if __name__ == "__main__":
         )
     ):
         if i % model.step == 0 and i != 0:
-            print("Processing window frames: ", len(window_frames))
             start_time = time.time()
             pred_tracks, pred_visibility = _process_step(
                 window_frames,
@@ -84,9 +83,16 @@ if __name__ == "__main__":
                 grid_size=args.grid_size,
                 grid_query_frame=args.grid_query_frame,
             )
-            print("Processing time: ", time.time() - start_time)
             is_first_step = False
-            print("Frame type: ", type(frame))
+        # if len(window_frames) >= model.step * 2:
+        #     start_time = time.time()
+        #     pred_tracks, pred_visibility = _process_step(
+        #         window_frames,
+        #         is_first_step,
+        #         grid_size=args.grid_size,
+        #         grid_query_frame=args.grid_query_frame,
+        #     )
+        #     is_first_step = False
         window_frames.append(frame)
     # Processing the final video frames in case video length is not a multiple of model.step
     pred_tracks, pred_visibility = _process_step(

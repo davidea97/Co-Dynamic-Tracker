@@ -25,7 +25,8 @@ def main(experiments_path, grid_size, intrinsics, window_len=8, checkpoint="scal
     tracker = OnlineDynamicTracker(intrinsics, grid_size=grid_size, checkpoint=checkpoint, window_len=window_len)
 
     print("Start tracking...")
-    tracker.full_online_dynamic_tracking(rgb_images, depth_images, camera_poses)
+    tracker.batch_dynamic_tracking(rgb_images, depth_images, camera_poses)
+    # tracker.online_search_and_dynamic_tracking(rgb_images, depth_images, camera_poses)
     print(f"Tracking time: {time.time() - start_tracking_time} seconds")
 
 # Main function

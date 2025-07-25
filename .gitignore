@@ -14,6 +14,7 @@ refined_masks_video/
 merged_pcl/
 merged_object.ply
 merged_ransac_pcl/
+saved_videos/
 
 *.pyc
 __pycache__/

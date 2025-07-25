@@ -74,46 +74,58 @@ class TrackerUtils:
         return result.transformation, result.fitness
     
 
-    def align_3D_masks(self, rgb, masks, depths, poses, window_counter, refined_3d_points, output_dir="merged_ransac_pcl"):
+    def align_3D_masks(self, rgb, masks, depths, poses, window_counter=None, refined_3d_points=None, output_dir="merged_pcl"):
         merged_pcd = o3d.geometry.PointCloud()
         os.makedirs(output_dir, exist_ok=True)
 
         accumulated_T = np.eye(4)
 
-        for t in range(len(masks) - 1):
-            src_masks, _ = self.compute_3D_from_mask(rgb[t], masks[t], depths[t], poses[t])
-            tgt_masks, tgt_colors = self.compute_3D_from_mask(rgb[t+1], masks[t+1], depths[t+1], poses[t+1])
-            src_dict = {id: pt for id, pt in refined_3d_points[t]}
-            tgt_dict = {id: pt for id, pt in refined_3d_points[t + 1]} 
+        for t in range(len(rgb) - 1):
+            if masks[t] is not None and masks[t+1] is not None:
+                src_masks, src_colors = self.compute_3D_from_mask(rgb[t], masks[t], depths[t], poses[t])
+                tgt_masks, tgt_colors = self.compute_3D_from_mask(rgb[t+1], masks[t+1], depths[t+1], poses[t+1])
+                # src_dict = {id: pt for id, pt in refined_3d_points[t]}
+                # tgt_dict = {id: pt for id, pt in refined_3d_points[t + 1]} 
 
-            common_ids = set(src_dict.keys()) & set(tgt_dict.keys())
+                # common_ids = set(src_dict.keys()) & set(tgt_dict.keys())
 
-            src_points = np.array([src_dict[i] for i in common_ids])
-            tgt_points = np.array([tgt_dict[i] for i in common_ids])
+                # src_points = np.array([src_dict[i] for i in common_ids])
+                # tgt_points = np.array([tgt_dict[i] for i in common_ids])
 
-            if len(src_points) < 10 or len(tgt_points) < 10:
-                continue
+                # if len(src_points) < 10 or len(tgt_points) < 10:
+                #     continue
 
-            T_rel, fitness = self.estimate_icp_transform(src_points, tgt_points)
-            T_rel_inv = np.linalg.inv(T_rel)
-            print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
-            print(T_rel)
-            print("Ransasc Transformation:")
-            T_rel_ransac, fitness = self.estimate_ransac_se3(src_points, tgt_points)
-            T_rel_ransac_inv = np.linalg.inv(T_rel_ransac)
-            print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
-            print(T_rel_ransac)
+                T_rel, fitness = self.estimate_icp_transform(src_masks, tgt_masks)
+                T_rel_inv = np.linalg.inv(T_rel)
+                print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
+                print(T_rel)
+                # print("Ransasc Transformation:")
+                # T_rel_ransac, fitness = self.estimate_ransac_se3(src_points, tgt_points)
+                # T_rel_ransac_inv = np.linalg.inv(T_rel_ransac)
+                # print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
+                # print(T_rel_ransac)
 
-            # accumulated_T = accumulated_T @ T_rel_inv 
-            accumulated_T = accumulated_T @ T_rel_ransac_inv 
-            tgt_pcd = o3d.geometry.PointCloud()
-            tgt_pcd.points = o3d.utility.Vector3dVector(tgt_masks)
-            tgt_pcd.colors = o3d.utility.Vector3dVector(tgt_colors)
-            tgt_pcd.transform(accumulated_T)
+                accumulated_T = accumulated_T @ T_rel_inv 
+                # accumulated_T = accumulated_T @ T_rel_ransac_inv 
+                tgt_pcd = o3d.geometry.PointCloud()
 
-            merged_pcd += tgt_pcd
+                
+                tgt_pcd.points = o3d.utility.Vector3dVector(tgt_masks)
+                tgt_pcd.colors = o3d.utility.Vector3dVector(tgt_colors)
+                tgt_pcd.transform(accumulated_T)
+
+                if t==0:
+                    src_pcd = o3d.geometry.PointCloud()
+                    src_pcd.points = o3d.utility.Vector3dVector(src_masks)
+                    src_pcd.colors = o3d.utility.Vector3dVector(src_colors)
+                    merged_pcd += src_pcd
+
+                merged_pcd += tgt_pcd
 
         # Salva o visualizza la nuvola completa
-        output_path = os.path.join(output_dir, f"merged_frame_{window_counter:04d}.ply")
+        if window_counter is not None:
+            output_path = os.path.join(output_dir, f"merged_frame_{window_counter:04d}.ply")
+        else:   
+            output_path = os.path.join(output_dir, f"merged_frame_complete.ply")
         o3d.io.write_point_cloud(output_path, merged_pcd)
         # o3d.visualization.draw_geometries([merged_pcd])
