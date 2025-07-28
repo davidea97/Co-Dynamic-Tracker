@@ -84,15 +84,7 @@ if __name__ == "__main__":
                 grid_query_frame=args.grid_query_frame,
             )
             is_first_step = False
-        # if len(window_frames) >= model.step * 2:
-        #     start_time = time.time()
-        #     pred_tracks, pred_visibility = _process_step(
-        #         window_frames,
-        #         is_first_step,
-        #         grid_size=args.grid_size,
-        #         grid_query_frame=args.grid_query_frame,
-        #     )
-        #     is_first_step = False
+
         window_frames.append(frame)
     # Processing the final video frames in case video length is not a multiple of model.step
     pred_tracks, pred_visibility = _process_step(
