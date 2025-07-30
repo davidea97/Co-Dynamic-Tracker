@@ -103,7 +103,6 @@ class BatchOnlineDynamicTracker():
         speed = compute_velocity(track_array, dt=1.0)
         diffs = np.linalg.norm(np.diff(track_array, axis=0), axis=1)
         max_jump = np.max(diffs) if len(diffs) >= 2 else 0.0
-        temporal_var = np.var(track_array, axis=0)
         jump_threshold = 0.05 # Right one 0.05
         angles = []
         for i in range(1, len(track_array)-1):
@@ -118,8 +117,8 @@ class BatchOnlineDynamicTracker():
 
         if len(diffs) < 2:
             dynamic = False
-        # elif max_jump > 2 * jump_threshold:
-        #     dynamic = False
+        elif max_jump > 2 * jump_threshold:
+            dynamic = False
         else:
             # dynamic = spread > 0.03  # Right one 0.03
             dynamic = mean_angle > 0.85 and spread > 0.02
@@ -364,7 +363,7 @@ class BatchOnlineDynamicTracker():
             pca = PCA(n_components=2)
             pca.fit(disp)
             pca_value =  pca.explained_variance_ratio_[0]
-            # print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} | RMSE: {rmse:.3f} | PCA: {pca_value:.3f} | n. points: {len(common_ids)}")
+            print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} | RMSE: {rmse:.3f} | PCA: {pca_value:.3f} | n. points: {len(common_ids)}")
             # print(T)
 
         return refined_2d_points, refined_3d_points, refined_2d_points_no_ids
@@ -417,7 +416,7 @@ class BatchOnlineDynamicTracker():
             return set(), [], [], set()
 
         # Applica SAM2
-        mask_arrays = mask_generator_fn(image=image, tracks2d=dynamic_points2D, output_dir=output_dir, window_counter=window_counter, image_counter=frame_idx)
+        mask_arrays = mask_generator_fn(image=image, dynamic_points=dynamic_points2D, static_points=None, output_dir=output_dir, window_counter=window_counter, image_counter=frame_idx)
 
         refined_dynamic_ids = set()
         refined_dynamic_ids_within_mask = set()

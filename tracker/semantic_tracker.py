@@ -39,17 +39,21 @@ class SemanticTracker:
             mask_path = os.path.join(output_dir, f"mask_{window_counter*self.window_len+image_counter:04d}.png")
             cv2.imwrite(mask_path, colored_mask)
 
-    def mask_generator(self, image, tracks2d, output_dir=None, window_counter=0, image_counter=0):
+    def mask_generator(self, image, dynamic_points, static_points=None, output_dir=None, window_counter=0, image_counter=0):
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
             self.predictor.set_image(image_rgb)
-            input_points = np.array(tracks2d)  # [[x1, y1], [x2, y2], ...]
-            input_labels = np.ones(len(input_points), dtype=np.int32)  # tutti foreground
+            if static_points is not None:
+                input_points = np.array(dynamic_points + static_points) 
+                input_labels = np.array([1] * len(dynamic_points) + [0] * len(static_points), dtype=np.int32)
+            else:
+                input_points = np.array(dynamic_points)  # [[x1, y1], [x2, y2], ...]
+                input_labels = np.ones(len(input_points), dtype=np.int32)  # tutti foreground
 
             masks, scores, logits = self.predictor.predict(
                 point_coords=input_points,
                 point_labels=input_labels,
-                multimask_output=True,
+                multimask_output=False,
             )
             
         mask_arrays = []
