@@ -19,7 +19,7 @@ def extract_poses(folder):
 def compute_velocity(track_array, dt=1.0):
     diffs = np.diff(track_array, axis=0)
     speeds = np.linalg.norm(diffs, axis=1) / dt
-    mean_speed = np.mean(speeds) if len(speeds) > 0 else 0.0
+    mean_speed = np.median(speeds) if len(speeds) > 0 else 0.0
     return mean_speed
 
 

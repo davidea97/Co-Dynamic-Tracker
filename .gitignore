@@ -15,6 +15,8 @@ merged_pcl/
 merged_object.ply
 merged_ransac_pcl/
 saved_videos/
+pcl_test/
+temp_video_dir/
 
 *.pyc
 __pycache__/

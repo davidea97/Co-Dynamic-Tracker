@@ -49,7 +49,7 @@ class SemanticTracker:
             masks, scores, logits = self.predictor.predict(
                 point_coords=input_points,
                 point_labels=input_labels,
-                multimask_output=False,
+                multimask_output=True,
             )
             
         mask_arrays = []

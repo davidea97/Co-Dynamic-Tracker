@@ -49,7 +49,7 @@ class TrackerUtils:
         colors = rgb[ys, xs]
         return world_coords, colors
 
-    def estimate_ransac_se3(self, src_points, tgt_points, threshold=0.02):
+    def estimate_ransac_se3(self, src_points, tgt_points, threshold=0.01):
         src_pcd = o3d.geometry.PointCloud()
         tgt_pcd = o3d.geometry.PointCloud()
         src_pcd.points = o3d.utility.Vector3dVector(src_points)
@@ -72,8 +72,13 @@ class TrackerUtils:
             criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(40000, 500)
         )
 
+        # inlier_indices = [corr[0] for corr in np.asarray(result.correspondence_set)]
+        # inlier_mask = np.zeros(len(src_points), dtype=bool)
+        # inlier_mask[inlier_indices] = True
+        # print(f"RANSAC inliers: {np.sum(inlier_mask)} / {len(src_points)}")
+
         return result.transformation, result.fitness, result.inlier_rmse
-    
+        
 
     def align_3D_masks(self, rgb, masks, depths, poses, window_counter=None, refined_3d_points=None, output_dir="merged_pcl"):
         merged_pcd = o3d.geometry.PointCloud()
@@ -132,3 +137,40 @@ class TrackerUtils:
             output_path = os.path.join(output_dir, f"merged_frame_complete.ply")
         o3d.io.write_point_cloud(output_path, merged_pcd)
         # o3d.visualization.draw_geometries([merged_pcd])
+
+    def visualize_tracks(self, track_3d, output_dir="pcl_test", window_counter=0):
+        all_points = []
+        all_colors = []
+
+        spreads = []
+        for n, track in track_3d.items():
+            track_array = np.array(track)
+            if len(track_array) < 2:
+                continue
+            spread = np.linalg.norm(track_array - np.median(track_array, axis=0), axis=1).max()
+            spreads.append(spread)
+
+        # Normalize spread for coloring
+        spreads = np.array(spreads)
+        min_spread, max_spread = np.percentile(spreads, 5), np.percentile(spreads, 95)
+        
+        cmap = cm.get_cmap("jet")
+        for n, track in track_3d.items():
+            track_array = np.array(track)
+            if len(track_array) < 2:
+                continue
+
+            spread = np.linalg.norm(track_array - np.mean(track_array, axis=0), axis=1).max()
+            norm_spread = np.clip((spread - min_spread) / (max_spread - min_spread + 1e-6), 0, 1)
+            color = cmap(norm_spread)[:3]
+
+            all_points.extend(track_array)
+            all_colors.extend([color] * len(track_array))
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(np.array(all_points))
+        pcd.colors = o3d.utility.Vector3dVector(np.array(all_colors))
+
+        # o3d.visualization.draw_geometries([pcd])
+        os.makedirs(output_dir, exist_ok=True)
+        o3d.io.write_point_cloud(os.path.join(output_dir, f"PCL_TEST_{window_counter}.ply"), pcd)

@@ -1,0 +1,9 @@
+experiments_path: "/home/allegro/davide_ws/habitat-lab/FisherRF-active-mapping/experiments/GaussianSLAM/Eudora-results/gibson/"
+grid_size: 15
+search_window_len: 8
+track_window_len: 1
+checkpoint: "/home/allegro/davide_ws/co-tracker/checkpoints/scaled_online.pth"
+intrinsics:
+  - [128, 0, 128]
+  - [0, 128, 128]
+  - [0, 0, 1]

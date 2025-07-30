@@ -37,7 +37,7 @@ def save_init_dynamic_estimation( window_rgb_images, pred_tracks, per_frame_dyna
         frame_idx = t
 
         # Disegna i punti statici in verde
-        for (n, _, _, _) in per_frame_static.get(frame_idx, []):
+        for (n, _, _, _, _) in per_frame_static.get(frame_idx, []):
             x, y = tracks_2d[t, n]
             cv2.circle(img_out, (int(x), int(y)), 2, (0, 255, 0), -1)  # Verde
 
