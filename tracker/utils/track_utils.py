@@ -49,7 +49,7 @@ class TrackerUtils:
         colors = rgb[ys, xs]
         return world_coords, colors
 
-    def estimate_ransac_se3(self, src_points, tgt_points, threshold=0.01):
+    def estimate_ransac_se3(self, src_points, tgt_points, threshold=0.02):
         src_pcd = o3d.geometry.PointCloud()
         tgt_pcd = o3d.geometry.PointCloud()
         src_pcd.points = o3d.utility.Vector3dVector(src_points)
@@ -66,12 +66,13 @@ class TrackerUtils:
             estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
             ransac_n=3,
             checkers=[
-                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(threshold)
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(threshold),
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.99),
             ],
             criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(40000, 500)
         )
 
-        return result.transformation, result.fitness
+        return result.transformation, result.fitness, result.inlier_rmse
     
 
     def align_3D_masks(self, rgb, masks, depths, poses, window_counter=None, refined_3d_points=None, output_dir="merged_pcl"):
@@ -84,6 +85,7 @@ class TrackerUtils:
             if masks[t] is not None and masks[t+1] is not None:
                 src_masks, src_colors = self.compute_3D_from_mask(rgb[t], masks[t], depths[t], poses[t])
                 tgt_masks, tgt_colors = self.compute_3D_from_mask(rgb[t+1], masks[t+1], depths[t+1], poses[t+1])
+                
                 # src_dict = {id: pt for id, pt in refined_3d_points[t]}
                 # tgt_dict = {id: pt for id, pt in refined_3d_points[t + 1]} 
 
@@ -92,13 +94,14 @@ class TrackerUtils:
                 # src_points = np.array([src_dict[i] for i in common_ids])
                 # tgt_points = np.array([tgt_dict[i] for i in common_ids])
 
-                # if len(src_points) < 10 or len(tgt_points) < 10:
+                # if len(src_points) < 5 or len(tgt_points) < 5:
                 #     continue
-
+                
+                # print("ICP Transformation:")
                 T_rel, fitness = self.estimate_icp_transform(src_masks, tgt_masks)
                 T_rel_inv = np.linalg.inv(T_rel)
-                print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
-                print(T_rel)
+                # print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
+                # print(T_rel)
                 # print("Ransasc Transformation:")
                 # T_rel_ransac, fitness = self.estimate_ransac_se3(src_points, tgt_points)
                 # T_rel_ransac_inv = np.linalg.inv(T_rel_ransac)

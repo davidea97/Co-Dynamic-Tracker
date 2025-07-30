@@ -67,11 +67,12 @@ class SemanticTracker:
         """
         Generate masks for a sequence of images based on the provided 2D tracks.
         """
+        time_dir_creation = time.time()
         temp_video_dir = create_temp_video_dir(rgb_images)
-
-        init_state = time.time()
+        # print(f"Temporary video directory created in {time.time() - time_dir_creation:.2f} seconds")
+        time_inference_state = time.time()
         inference_state = self.video_predictor.init_state(video_path=temp_video_dir)
-        print(f"Initialization time: {time.time() - init_state:.2f} seconds")
+        # print(f"Inference state initialized in {time.time() - time_inference_state:.2f} seconds")
 
         ann_frame_idx = 0  # the frame index we interact with
         ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
@@ -79,7 +80,7 @@ class SemanticTracker:
         input_points = np.array(tracks2d)
         input_labels = np.ones(len(input_points), dtype=np.int32)
 
-        add_new_points_time = time.time()
+        time_add_new_points = time.time()
         _, out_obj_ids, out_mask_logits = self.video_predictor.add_new_points_or_box(
             inference_state=inference_state,
             frame_idx=ann_frame_idx,
@@ -87,27 +88,23 @@ class SemanticTracker:
             points=input_points,
             labels=input_labels,
         )
-        print(f"Adding new points time: {time.time() - add_new_points_time:.2f} seconds")
-
-        video_segments = {}  # video_segments contains the per-frame segmentation results
+        # print(f"New points added in {time.time() - time_add_new_points:.2f} seconds")
         if output_dir is not None:
             os.makedirs(output_dir, exist_ok=True)
         image_counter = 0
         mask_arrays = [None] * len(rgb_images)
-        propagate_time = time.time()
-        for out_frame_idx, out_obj_ids, out_mask_logits in self.video_predictor.propagate_in_video(inference_state):
-            frame_masks = {}
-            for i, out_obj_id in enumerate(out_obj_ids):
+        time_propagate_in_video = time.time()
+        for _, out_obj_ids, out_mask_logits in self.video_predictor.propagate_in_video(inference_state):
+            for i, _ in enumerate(out_obj_ids):
                 mask = (out_mask_logits[i] > 0.0).cpu().numpy().astype(np.float32)[0]
 
                 mask_np = mask.astype("uint8") * 255
                 out_path = os.path.join(output_dir, f"mask_frame_{window_counter*self.window_len+image_counter:04d}.png")
                 cv2.imwrite(out_path, mask_np)
             
-            # video_segments[out_frame_idx] = mask
             mask_arrays[image_counter] = mask.astype(bool)
             image_counter += 1
-        print(f"Propagation time: {time.time() - propagate_time:.2f} seconds")
+        # print(f"Propagation in video completed in {time.time() - time_propagate_in_video:.2f} seconds")
         shutil.rmtree(temp_video_dir)
         self.video_predictor.reset_state(inference_state)
         return mask_arrays
