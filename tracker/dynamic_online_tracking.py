@@ -110,10 +110,13 @@ class BatchOnlineDynamicTracker():
             v2 = track_array[i+1] - track_array[i]
             cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
             angles.append(cos_angle)
+
         if len(angles) > 0:
             mean_angle = np.mean(angles)
+            std_angle = np.std(angles)
         else:
             mean_angle = 0.0
+            std_angle = 0.0
 
         if len(diffs) < 2:
             dynamic = False
@@ -121,7 +124,8 @@ class BatchOnlineDynamicTracker():
             dynamic = False
         else:
             # dynamic = spread > 0.03  # Right one 0.03
-            dynamic = mean_angle > 0.85 and spread > 0.02
+            dynamic = mean_angle > 0.85 and spread > 0.02 and std_angle < 0.05
+
 
         return dynamic, spread, speed, mean_angle
         
@@ -241,6 +245,54 @@ class BatchOnlineDynamicTracker():
                     refined_points3D.append(world_coords[:3])
         return refined_points3D
 
+    def refine_dynamic_points(self, 
+        window_rgb_images, 
+        window_depth_images,
+        window_camera_poses,
+        pred_tracks,
+        pred_visibility,
+        per_frame_raw_dynamic,
+        per_frame_raw_static,
+        window_counter,
+        dynamic_threshold=0.5,
+        min_points_in_mask=3,
+        output_dir="output_masks"
+        ):
+
+        refined_2d_points_with_ids_per_frame = {}
+
+        tracks_2d = pred_tracks[0].cpu().numpy()
+        visibility_2d = pred_visibility[0].cpu().numpy()
+
+        init_3d_points = {}
+
+        # Let's refine the dynamic points using SAM2 on the first frame of the window
+        for t, _ in enumerate(window_rgb_images):
+            # refined_with_ids = []
+            dynamic_idx_frame = [entry[0] for entry in per_frame_raw_dynamic[t]]
+            dynamic_pts_frame = [entry[1] for entry in per_frame_raw_dynamic[t]]
+ 
+            init_3d_points[t] = list(zip(dynamic_idx_frame, dynamic_pts_frame))
+    
+        for t in range(len(window_rgb_images)-1):
+            src_dict = {id: pt for id, pt in init_3d_points[t]}
+            tgt_dict = {id: pt for id, pt in init_3d_points[t + 1]} 
+
+            common_ids = sorted(set(src_dict.keys()) & set(tgt_dict.keys()))
+
+            src_points = np.array([src_dict[i] for i in common_ids])
+            tgt_points = np.array([tgt_dict[i] for i in common_ids])
+
+            if len(src_points) < 4 or len(tgt_points) < 4:
+                continue
+                
+            _, fitness, rmse, outliers = self.tracker_utils.estimate_ransac_se3(src_points, tgt_points)
+            outlier_ids = [common_ids[i] for i in outliers]
+            print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} | RMSE: {rmse:.3f} | Outliers: {outlier_ids}")
+
+        return init_3d_points
+    
+
     def get_refined_dynamic_points(self, 
         window_rgb_images, 
         window_depth_images,
@@ -260,7 +312,8 @@ class BatchOnlineDynamicTracker():
 
         tracks_2d = pred_tracks[0].cpu().numpy()
         visibility_2d = pred_visibility[0].cpu().numpy()
-        
+
+        # Let's refine the dynamic points using SAM2 on the first frame of the window
         for t, img in enumerate(window_rgb_images):
             if t == 0:
                 refined_dynamic_ids, _, _, refined_inside_masks_ids = self.SAM_refining(
@@ -357,13 +410,13 @@ class BatchOnlineDynamicTracker():
             if len(src_points) < 4 or len(tgt_points) < 4:
                 continue
 
-            T, fitness, rmse = self.tracker_utils.estimate_ransac_se3(src_points, tgt_points)
+            T, fitness, rmse, _ = self.tracker_utils.estimate_ransac_se3(src_points, tgt_points)
             # if fitness < 0.75:
             disp = tgt_points - src_points
             pca = PCA(n_components=2)
             pca.fit(disp)
             pca_value =  pca.explained_variance_ratio_[0]
-            print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} | RMSE: {rmse:.3f} | PCA: {pca_value:.3f} | n. points: {len(common_ids)}")
+            # print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} | RMSE: {rmse:.3f} | PCA: {pca_value:.3f} | n. points: {len(common_ids)}")
             # print(T)
 
         return refined_2d_points, refined_3d_points, refined_2d_points_no_ids
@@ -424,65 +477,65 @@ class BatchOnlineDynamicTracker():
         # At the moment we assume a single masks per frame but it is possible to have multiple blobs
         for mask in mask_arrays:
             h, w = mask.shape
-            num_labels, labels = cv2.connectedComponents(mask.astype(np.uint8))
+            # num_labels, labels = cv2.connectedComponents(mask.astype(np.uint8))
             
-            for label_id in range(1, num_labels):  # label 0 is background
-                mask_ids_inside = []
-                mask_blob = (labels == label_id)
-                for n in range(tracks_2d.shape[1]):
-                    x, y = tracks_2d[frame_idx, n]
-                    x, y = int(x), int(y)
-                    if 0 <= y < h and 0 <= x < w and mask_blob[y, x]:
-                        mask_ids_inside.append(n)
-                        # refined_dynamic_ids_within_mask.add(n)
-                
-                # N.B. it can be possible that the number of points inside the mask is more than the number of dynamic points used as prompts
-                if len(mask_ids_inside) < min_points_in_mask:
-                    continue  
-                
-                # Check the ratio of init dynamic points inside the mask
-                dynamic_in_mask = [n for n in mask_ids_inside if n in dynamic_ids]
-                static_in_mask = [n for n in mask_ids_inside if n not in dynamic_ids]
-                ratio_dynamic = len(dynamic_in_mask) / len(mask_ids_inside)
+            # for label_id in range(1, num_labels):  # label 0 is background
+            mask_ids_inside = []
+            #     mask_blob = (labels == label_id)
+            for n in range(tracks_2d.shape[1]):
+                x, y = tracks_2d[frame_idx, n]
+                x, y = int(x), int(y)
+                if 0 <= y < h and 0 <= x < w and mask[y, x]:
+                    mask_ids_inside.append(n)
+                    # refined_dynamic_ids_within_mask.add(n)
+            
+            # N.B. it can be possible that the number of points inside the mask is more than the number of dynamic points used as prompts
+            if len(mask_ids_inside) < min_points_in_mask:
+                continue  
+            
+            # Check the ratio of init dynamic points inside the mask
+            dynamic_in_mask = [n for n in mask_ids_inside if n in dynamic_ids]
+            static_in_mask = [n for n in mask_ids_inside if n not in dynamic_ids]
+            ratio_dynamic = len(dynamic_in_mask) / len(mask_ids_inside)
 
-                if ratio_dynamic > dynamic_threshold:
-                    dyn_speed_by_id = {n: speed for (n, _, _, speed, _) in per_frame_raw_dynamic.get(frame_idx, []) if n in dynamic_in_mask}
-                    dyn_spread_by_id = {n: spread for (n, _, spread, _, _) in per_frame_raw_dynamic.get(frame_idx, []) if n in dynamic_in_mask}
-                    static_speed_by_id = {n: speed for (n, _, _, speed, _) in per_frame_raw_static.get(frame_idx, []) if n in static_in_mask}
-                    static_spread_by_id = {n: spread for (n, _, spread, _, _) in per_frame_raw_static.get(frame_idx, []) if n in static_in_mask}
+            if ratio_dynamic > dynamic_threshold:
+                dyn_speed_by_id = {n: speed for (n, _, _, speed, _) in per_frame_raw_dynamic.get(frame_idx, []) if n in dynamic_in_mask}
+                dyn_spread_by_id = {n: spread for (n, _, spread, _, _) in per_frame_raw_dynamic.get(frame_idx, []) if n in dynamic_in_mask}
+                static_speed_by_id = {n: speed for (n, _, _, speed, _) in per_frame_raw_static.get(frame_idx, []) if n in static_in_mask}
+                static_spread_by_id = {n: spread for (n, _, spread, _, _) in per_frame_raw_static.get(frame_idx, []) if n in static_in_mask}
 
-                    dyn_speeds = list(dyn_speed_by_id.values())
-                    dyn_spreads = list(dyn_spread_by_id.values())
+                dyn_speeds = list(dyn_speed_by_id.values())
+                dyn_spreads = list(dyn_spread_by_id.values())
 
-                    if len(dyn_speeds) == 0 or len(dyn_spreads) == 0:
-                        continue
+                if len(dyn_speeds) == 0 or len(dyn_spreads) == 0:
+                    continue
 
-                    mean_speed = np.median(dyn_speeds)
-                    mean_spread = np.median(dyn_spreads)
+                mean_speed = np.median(dyn_speeds)
+                mean_spread = np.median(dyn_spreads)
 
-                    for n in mask_ids_inside:
-                        refined_dynamic_ids_within_mask.add(n)
-                        # Remove false positives (let's compare the speed and spread of the dynamic points in the mask with the mean, theoretically they should be higher than the mean if they really belong to a dynamic object
-                        # otherwise if they are outlier they are probably moving slowly)
-                        if n in dynamic_ids and n in dyn_speed_by_id and n in dyn_spread_by_id:
-                            speed = dyn_speed_by_id[n]
-                            spread = dyn_spread_by_id[n]
-                            if speed > mean_speed/2 and spread > mean_spread/2:
-                                refined_dynamic_ids.add(n)
-                            else:
-                                pass
+                for n in mask_ids_inside:
+                    refined_dynamic_ids_within_mask.add(n)
+                    # Remove false positives (let's compare the speed and spread of the dynamic points in the mask with the mean, theoretically they should be higher than the mean if they really belong to a dynamic object
+                    # otherwise if they are outlier they are probably moving slowly)
+                    if n in dynamic_ids and n in dyn_speed_by_id and n in dyn_spread_by_id:
+                        speed = dyn_speed_by_id[n]
+                        spread = dyn_spread_by_id[n]
+                        if speed > mean_speed/2 and spread > mean_spread/2:
+                            refined_dynamic_ids.add(n)
+                        else:
+                            pass
 
-                        # Relabel static points
-                        elif n in static_speed_by_id and n in static_spread_by_id:
-                            speed = static_speed_by_id[n]
-                            spread = static_spread_by_id[n]
+                    # Relabel static points
+                    elif n in static_speed_by_id and n in static_spread_by_id:
+                        speed = static_speed_by_id[n]
+                        spread = static_spread_by_id[n]
 
-                            # Convert static points to dynamic if their speed and spread are at least half of the mean
-                            if speed > mean_speed/2 and spread > mean_spread/2:
-                                refined_dynamic_ids.add(n)
-                else:
-                    # All points in the mask are discarded
-                    pass 
+                        # Convert static points to dynamic if their speed and spread are at least half of the mean
+                        if speed > mean_speed/2 and spread > mean_spread/2:
+                            refined_dynamic_ids.add(n)
+            else:
+                # All points in the mask are discarded
+                pass 
 
         # Convert refined dynamic ids to 2D points
         dynamic_points2D = []
@@ -589,6 +642,20 @@ class BatchOnlineDynamicTracker():
         # Get dynamic and static points from the 3D tracks
         pred_3d_dynamic_tracks, pred_3d_static_tracks = self.get_dynamic_3D_points(pred_3d_tracks, window_counter=window_counter)
         
+        self.refine_dynamic_points(
+            window_rgb_images,
+            window_depth_images,
+            window_camera_poses,
+            pred_2d_tracks,
+            pred_visibility,
+            pred_3d_dynamic_tracks,
+            pred_3d_static_tracks,
+            window_counter=window_counter,
+            dynamic_threshold=0.5,
+            min_points_in_mask=4,
+            output_dir="output_masks"
+        )
+
         # Raw dynamic and static points visualization
         refined_2d_points, refined_3d_points, refined_2d_points_no_ids = self.get_refined_dynamic_points(
             window_rgb_images,
@@ -603,6 +670,8 @@ class BatchOnlineDynamicTracker():
             min_points_in_mask=4,
             output_dir="output_masks"
         )
+
+        
 
         # Refine the 2D points to 3D points using depth and camera poses
         # refined_3d_points = {}
@@ -640,7 +709,7 @@ class BatchOnlineDynamicTracker():
         #     print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} ! RMSE: {rmse:.3f}")
         
         if self.verbose:
-            save_init_dynamic_estimation(window_rgb_images, pred_2d_tracks, pred_3d_dynamic_tracks, pred_3d_static_tracks, window_counter=window_counter, window_len=self.window_len_search)
+            save_init_dynamic_estimation(window_rgb_images, pred_2d_tracks, pred_3d_dynamic_tracks, pred_3d_static_tracks, output_dir="output_init_visualization", window_counter=window_counter, window_len=self.window_len_search)
             save_refined_dynamic_visualization(window_rgb_images, pred_2d_tracks, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len=self.window_len_search)
 
         # MEMORY BANK: let's keep only the last frame's refined points
@@ -854,6 +923,7 @@ class BatchOnlineDynamicTracker():
         
 
         # self.tracker_utils.align_3D_masks(rgb_images, all_final_masks, depth_images, camera_poses)
-    
+
+        make_video_from_frames("output_init_visualization", "init_full_video.mp4")
         make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
 

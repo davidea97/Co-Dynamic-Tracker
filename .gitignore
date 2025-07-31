@@ -17,6 +17,8 @@ merged_ransac_pcl/
 saved_videos/
 pcl_test/
 temp_video_dir/
+output_init_visualization/
+output_video/
 
 *.pyc
 __pycache__/

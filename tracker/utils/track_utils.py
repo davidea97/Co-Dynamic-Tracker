@@ -49,7 +49,7 @@ class TrackerUtils:
         colors = rgb[ys, xs]
         return world_coords, colors
 
-    def estimate_ransac_se3(self, src_points, tgt_points, threshold=0.01):
+    def estimate_ransac_se3(self, src_points, tgt_points, threshold=0.03):
         src_pcd = o3d.geometry.PointCloud()
         tgt_pcd = o3d.geometry.PointCloud()
         src_pcd.points = o3d.utility.Vector3dVector(src_points)
@@ -72,12 +72,12 @@ class TrackerUtils:
             criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(40000, 500)
         )
 
-        # inlier_indices = [corr[0] for corr in np.asarray(result.correspondence_set)]
-        # inlier_mask = np.zeros(len(src_points), dtype=bool)
-        # inlier_mask[inlier_indices] = True
-        # print(f"RANSAC inliers: {np.sum(inlier_mask)} / {len(src_points)}")
+        inlier_indices = [corr[0] for corr in np.asarray(result.correspondence_set)]
+        inlier_mask = np.zeros(len(src_points), dtype=bool)
+        inlier_mask[inlier_indices] = True
+        outlier_indices = np.where(~inlier_mask)[0]
 
-        return result.transformation, result.fitness, result.inlier_rmse
+        return result.transformation, result.fitness, result.inlier_rmse, outlier_indices
         
 
     def align_3D_masks(self, rgb, masks, depths, poses, window_counter=None, refined_3d_points=None, output_dir="merged_pcl"):
