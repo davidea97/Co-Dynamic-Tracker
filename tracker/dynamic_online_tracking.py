@@ -28,6 +28,7 @@ class BatchOnlineDynamicTracker():
         self.window_len_track = track_window_len
         self.grid_query_frame = 0
         self.grid_size = grid_size
+        self.query_threshold = grid_size * grid_size * 0.01  # 1% of the grid size
         self.fx = intrinsics[0, 0] if intrinsics is not None else 1.0
         self.fy = intrinsics[1, 1] if intrinsics is not None else 1.0
         self.cx = intrinsics[0, 2] if intrinsics is not None else 1.0
@@ -67,7 +68,7 @@ class BatchOnlineDynamicTracker():
             queries=queries,
         )
     
-    def process_window(self, window_rgb_images, queries=None):
+    def tracker_process_window(self, window_rgb_images, queries=None):
         """
         Process a window of images to track objects and generate 3D points.
         """
@@ -124,7 +125,7 @@ class BatchOnlineDynamicTracker():
             dynamic = False
         else:
             # dynamic = spread > 0.03  # Right one 0.03
-            dynamic = mean_angle > 0.85 and spread > 0.02 and std_angle < 0.05
+            dynamic = mean_angle > 0.85 and spread > 0.02 and std_angle < 0.07
 
 
         return dynamic, spread, speed, mean_angle
@@ -246,51 +247,39 @@ class BatchOnlineDynamicTracker():
         return refined_points3D
 
     def refine_dynamic_points(self, 
-        window_rgb_images, 
-        window_depth_images,
-        window_camera_poses,
         pred_tracks,
-        pred_visibility,
-        per_frame_raw_dynamic,
-        per_frame_raw_static,
-        window_counter,
-        dynamic_threshold=0.5,
-        min_points_in_mask=3,
-        output_dir="output_masks"
+        per_frame_raw_dynamic
         ):
 
-        refined_2d_points_with_ids_per_frame = {}
-
         tracks_2d = pred_tracks[0].cpu().numpy()
-        visibility_2d = pred_visibility[0].cpu().numpy()
 
         init_3d_points = {}
-
+        init_2d_points = {}
+        init_2d_points_no_ids = {}
         # Let's refine the dynamic points using SAM2 on the first frame of the window
-        for t, _ in enumerate(window_rgb_images):
-            # refined_with_ids = []
+        for t in range(self.window_len_search):
+            refined_with_ids = []
             dynamic_idx_frame = [entry[0] for entry in per_frame_raw_dynamic[t]]
             dynamic_pts_frame = [entry[1] for entry in per_frame_raw_dynamic[t]]
- 
-            init_3d_points[t] = list(zip(dynamic_idx_frame, dynamic_pts_frame))
-    
-        for t in range(len(window_rgb_images)-1):
-            src_dict = {id: pt for id, pt in init_3d_points[t]}
-            tgt_dict = {id: pt for id, pt in init_3d_points[t + 1]} 
+            # Keep dynamic points only if they are more than the 1% of the total number of points
+            if len(dynamic_idx_frame) > 0.01 * self.grid_size**2:
+                init_3d_points[t] = list(zip(dynamic_idx_frame, dynamic_pts_frame))
+            
+                for n in dynamic_idx_frame:
+                    x, y = tracks_2d[t, n]
+                    refined_with_ids.append((n, [x, y]))
 
-            common_ids = sorted(set(src_dict.keys()) & set(tgt_dict.keys()))
+                points2D = [xy for (_, xy) in refined_with_ids]
+                init_2d_points_no_ids[t] = [xy for (_, xy) in refined_with_ids]
+                init_2d_points[t] = [
+                    (track_id, point2D) for (track_id, point2D) in zip([id for (id, _) in refined_with_ids], points2D)
+                ]
+            else:
+                init_3d_points[t] = []
+                init_2d_points[t] = []
+                init_2d_points_no_ids[t] = []
 
-            src_points = np.array([src_dict[i] for i in common_ids])
-            tgt_points = np.array([tgt_dict[i] for i in common_ids])
-
-            if len(src_points) < 4 or len(tgt_points) < 4:
-                continue
-                
-            _, fitness, rmse, outliers = self.tracker_utils.estimate_ransac_se3(src_points, tgt_points)
-            outlier_ids = [common_ids[i] for i in outliers]
-            print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} | RMSE: {rmse:.3f} | Outliers: {outlier_ids}")
-
-        return init_3d_points
+        return init_2d_points, init_3d_points, init_2d_points_no_ids
     
 
     def get_refined_dynamic_points(self, 
@@ -381,43 +370,6 @@ class BatchOnlineDynamicTracker():
             refined_3d_points_within_masks[t] = [
                 (track_id, point3D) for (track_id, point3D) in zip([id for (id, _) in refined_with_ids], points3D)
             ]
-
-        # for t in range(len(window_rgb_images)-1):
-        #     src_dict = {id: pt for id, pt in refined_3d_points[t]}
-        #     tgt_dict = {id: pt for id, pt in refined_3d_points[t + 1]} 
-
-        #     common_ids = set(src_dict.keys()) & set(tgt_dict.keys())
-
-        #     src_points = np.array([src_dict[i] for i in common_ids])
-        #     tgt_points = np.array([tgt_dict[i] for i in common_ids])
-
-        #     if len(src_points) < 4 or len(tgt_points) < 4:
-        #         continue
-
-        #     _, fitness, rmse = self.tracker_utils.estimate_ransac_se3(src_points, tgt_points)
-        #     # if fitness < 0.75:
-        #     print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} ! RMSE: {rmse:.3f}")
-
-        for t in range(len(window_rgb_images)-1):
-            src_dict = {id: pt for id, pt in refined_3d_points_within_masks[t]}
-            tgt_dict = {id: pt for id, pt in refined_3d_points_within_masks[t + 1]} 
-
-            common_ids = set(src_dict.keys()) & set(tgt_dict.keys())
-
-            src_points = np.array([src_dict[i] for i in common_ids])
-            tgt_points = np.array([tgt_dict[i] for i in common_ids])
-
-            if len(src_points) < 4 or len(tgt_points) < 4:
-                continue
-
-            T, fitness, rmse, _ = self.tracker_utils.estimate_ransac_se3(src_points, tgt_points)
-            # if fitness < 0.75:
-            disp = tgt_points - src_points
-            pca = PCA(n_components=2)
-            pca.fit(disp)
-            pca_value =  pca.explained_variance_ratio_[0]
-            # print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} | RMSE: {rmse:.3f} | PCA: {pca_value:.3f} | n. points: {len(common_ids)}")
-            # print(T)
 
         return refined_2d_points, refined_3d_points, refined_2d_points_no_ids
     
@@ -553,18 +505,22 @@ class BatchOnlineDynamicTracker():
 
         return refined_dynamic_ids, dynamic_points2D, refined_with_ids, refined_dynamic_ids_within_mask
 
-    def masks_and_queries_for_next_window(self, window_rgb_images, refined_points_per_frame, window_counter, last_frame_dynamic):
+    def masks_and_queries_for_next_window(self, window_rgb_images, refined_points_per_frame, window_counter):
+
+        last_frame_idx = len(window_rgb_images) - 1
+        last_frame_dynamic = refined_points_per_frame[last_frame_idx]  # lista di [x, y]
 
         final_masks = [None] * len(window_rgb_images)
 
         if len(refined_points_per_frame[0]) > 0:
+            # generating_masks_time = time.time()
             final_masks = self.semantic_tracker.window_mask_generator(
                 rgb_images=window_rgb_images,
                 tracks2d=refined_points_per_frame[0],
                 window_counter=window_counter,
                 output_dir="refined_masks_video"
             )
-
+            # print(f"Window Mask generation took {time.time() - generating_masks_time:.3f} seconds")
         last_frame_final_mask = final_masks[-1] if len(final_masks) > 0 else None
         if len(last_frame_dynamic) > 0 and last_frame_final_mask is not None:
             mask_h, mask_w = last_frame_final_mask.shape
@@ -587,6 +543,41 @@ class BatchOnlineDynamicTracker():
 
         return queries_tensor, final_masks
     
+    def queries_for_next_window(self, window_rgb_images, refined_2d_points_no_ids):
+        
+        # Let's analyze the last frame of the current window
+        last_frame_idx = len(window_rgb_images) - 1
+        last_frame_dynamic = refined_2d_points_no_ids[last_frame_idx]  # lista di [x, y]
+        
+        if len(last_frame_dynamic) > 0:
+
+            queries_pts = []
+            for x, y in last_frame_dynamic:        
+                queries_pts.append([x, y])
+
+            if len(queries_pts) > 0:
+                queries_np = np.array([[0, x, y] for x, y in queries_pts], dtype=np.float32)
+                queries_tensor = torch.from_numpy(queries_np)[None].to(self.device)
+            else:
+                queries_tensor = None  # no valid queries in mask
+        else:
+            queries_tensor = None
+
+        return queries_tensor
+    
+    def mask_generation(self, window_rgb_images, init_window_dynamic_point, window_counter):
+
+        final_masks = [None] * len(window_rgb_images)
+
+        if len(init_window_dynamic_point) > 0:
+            final_masks = self.semantic_tracker.window_mask_generator(
+                rgb_images=window_rgb_images,
+                tracks2d=init_window_dynamic_point,
+                window_counter=window_counter,
+                output_dir="refined_masks_video"
+            )
+        
+        return final_masks
 
     def additional_queries_for_next_window(self, window_rgb_images, refined_points_per_frame, window_counter, last_frame_dynamic):
         """
@@ -634,94 +625,39 @@ class BatchOnlineDynamicTracker():
     def window_dynamic_search_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_counter=0, queries=None):
         
         # Process the window tracks
-        pred_2d_tracks, pred_visibility = self.process_window(window_rgb_images, queries=queries)
+        pred_2d_tracks, pred_visibility = self.tracker_process_window(window_rgb_images, queries=queries)
 
         # Get 3D points with respect to the world reference frame from the 2D tracks (using depth and camera poses)
         pred_3d_tracks = self.get_3D_points(window_rgb_images, window_depth_images, window_camera_poses, pred_2d_tracks, pred_visibility)
 
-        # Get dynamic and static points from the 3D tracks
-        pred_3d_dynamic_tracks, pred_3d_static_tracks = self.get_dynamic_3D_points(pred_3d_tracks, window_counter=window_counter)
+        # Get raw dynamic and static points from the 3D tracks
+        pred_3d_dynamic_tracks, _ = self.get_dynamic_3D_points(pred_3d_tracks, window_counter=window_counter)
         
-        self.refine_dynamic_points(
-            window_rgb_images,
-            window_depth_images,
-            window_camera_poses,
-            pred_2d_tracks,
-            pred_visibility,
-            pred_3d_dynamic_tracks,
-            pred_3d_static_tracks,
-            window_counter=window_counter,
-            dynamic_threshold=0.5,
-            min_points_in_mask=4,
-            output_dir="output_masks"
-        )
-
-        # Raw dynamic and static points visualization
-        refined_2d_points, refined_3d_points, refined_2d_points_no_ids = self.get_refined_dynamic_points(
-            window_rgb_images,
-            window_depth_images,
-            window_camera_poses,
-            pred_2d_tracks,
-            pred_visibility,
-            pred_3d_dynamic_tracks,
-            pred_3d_static_tracks,
-            window_counter=window_counter,
-            dynamic_threshold=0.5,
-            min_points_in_mask=4,
-            output_dir="output_masks"
-        )
-
+        # Refine the dynamic points using spread and motion vector analysis
+        refined_2d_points, refined_3d_points, refined_2d_points_no_ids = self.refine_dynamic_points(pred_2d_tracks, pred_3d_dynamic_tracks)
         
-
-        # Refine the 2D points to 3D points using depth and camera poses
-        # refined_3d_points = {}
-        # refined_2d_points = {}
-        # for t, refined_with_ids in semantically_refined_2d_points_with_ids.items():
-        #     points2D = [xy for (_, xy) in refined_with_ids]
-        #     points3D = self.compute_3D_from_2D(
-        #         points2D,
-        #         window_depth_images[t],
-        #         window_camera_poses[t]
-        #     )
-            
-        #     refined_2d_points[t] = [
-        #         (track_id, point2D) for (track_id, point2D) in zip([id for (id, _) in refined_with_ids], points2D)
-        #     ]
-
-        #     refined_3d_points[t] = [
-        #         (track_id, point3D) for (track_id, point3D) in zip([id for (id, _) in refined_with_ids], points3D)
-        #     ]
-
-        # for t in range(len(window_rgb_images)-1):
-        #     src_dict = {id: pt for id, pt in refined_3d_points[t]}
-        #     tgt_dict = {id: pt for id, pt in refined_3d_points[t + 1]} 
-
-        #     common_ids = set(src_dict.keys()) & set(tgt_dict.keys())
-
-        #     src_points = np.array([src_dict[i] for i in common_ids])
-        #     tgt_points = np.array([tgt_dict[i] for i in common_ids])
-
-        #     if len(src_points) < 4 or len(tgt_points) < 4:
-        #         continue
-
-        #     _, fitness, rmse = self.tracker_utils.estimate_ransac_se3(src_points, tgt_points)
-        #     # if fitness < 0.75:
-        #     print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f} ! RMSE: {rmse:.3f}")
-        
+        # saving_time = time.time()
         if self.verbose:
-            save_init_dynamic_estimation(window_rgb_images, pred_2d_tracks, pred_3d_dynamic_tracks, pred_3d_static_tracks, output_dir="output_init_visualization", window_counter=window_counter, window_len=self.window_len_search)
+            # save_init_dynamic_estimation(window_rgb_images, pred_2d_tracks, pred_3d_dynamic_tracks, pred_3d_static_tracks, output_dir="output_init_visualization", window_counter=window_counter, window_len=self.window_len_search)
             save_refined_dynamic_visualization(window_rgb_images, pred_2d_tracks, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len=self.window_len_search)
-
-        # MEMORY BANK: let's keep only the last frame's refined points
-        last_frame_idx = len(window_rgb_images) - 1
-        last_frame_dynamic = refined_2d_points_no_ids[last_frame_idx]  # lista di [x, y]
-
-        queries_tensor, final_masks = self.masks_and_queries_for_next_window(window_rgb_images, refined_2d_points_no_ids, window_counter, last_frame_dynamic)
         
+        # MEMORY BANK: let's keep only the last frame's refined points
+        # queries_tensor, final_masks = self.masks_and_queries_for_next_window(window_rgb_images, refined_2d_points_no_ids, window_counter)
+
+        # Queries correspond to the dynamic points in the last frame of the window
+        queries_tensor = self.queries_for_next_window(window_rgb_images, refined_2d_points_no_ids)
+        final_masks = self.mask_generation(window_rgb_images, refined_2d_points_no_ids[0], window_counter)
+        # If the queries are None or the number of queries is less than the threshold, we generate masks and we will proceed with the search
+        if (queries_tensor is None or len(queries_tensor[0]) > self.query_threshold):
+            self.dynamic_tracking_mode = True
+        else:
+            self.dynamic_tracking_mode = False
+            
         if len(refined_3d_points[0])>0:
             self.tracker_utils.align_3D_masks(window_rgb_images, final_masks, window_depth_images, window_camera_poses, window_counter, refined_3d_points)
-
-        return pred_2d_tracks, pred_visibility, pred_3d_tracks, queries_tensor, refined_3d_points, final_masks, refined_2d_points
+        
+        # print(f"Mask alignment took {time.time() - mask_alignment_time:.3f} seconds")
+        return pred_2d_tracks, pred_visibility, pred_3d_tracks, queries_tensor, refined_3d_points, final_masks
     
 
     def window_dynamic_tracking_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_counter=0, queries=None, previous_3d_points=None, last_previous_2d_points=None):
@@ -885,15 +821,17 @@ class BatchOnlineDynamicTracker():
         prev_queries = None
         window_counter = 0
         all_final_masks = []
+        init_window_dynamic_point = []
+        window_ref = 0
         for i in tqdm(range(0, len(rgb_images))):
             if i % self.window_len_search == 0 and i != 0:
                 print("Processing window from frame", i - self.window_len_search, "to", i - 1)
-                pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, final_masks, refined_2d_points  = self.window_dynamic_search_process(
+                pred_tracks, pred_visibility, _, _, refined_3d_points, final_masks  = self.window_dynamic_search_process(
                     self.window_frames[i - self.window_len_search:i],
                     depth_images[i - self.window_len_search:i],
                     camera_poses[i - self.window_len_search:i],
                     window_counter=window_counter,
-                    queries=None
+                    queries=None,
                 )
 
                 window_counter += 1
@@ -904,14 +842,13 @@ class BatchOnlineDynamicTracker():
                 all_final_masks.extend(final_masks)
             self.window_frames.append(rgb_images[i])
             
-
         # This handles the case where the last window is not prcocessed yet
-        pred_tracks, pred_visibility, _, _, refined_3d_points, final_masks, refined_2d_points = self.window_dynamic_search_process(
+        pred_tracks, pred_visibility, _, _, refined_3d_points, final_masks = self.window_dynamic_search_process(
             self.window_frames[-self.window_len_search:],
             depth_images[-self.window_len_search:],
             camera_poses[-self.window_len_search:],
             window_counter=window_counter,
-            queries=None
+            queries=None,
         )
         all_final_masks.extend(final_masks)
 
@@ -924,6 +861,7 @@ class BatchOnlineDynamicTracker():
 
         # self.tracker_utils.align_3D_masks(rgb_images, all_final_masks, depth_images, camera_poses)
 
-        make_video_from_frames("output_init_visualization", "init_full_video.mp4")
-        make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
+        if self.verbose:
+            make_video_from_frames("output_init_visualization", "init_full_video.mp4")
+            make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
 

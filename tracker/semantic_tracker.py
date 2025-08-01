@@ -71,10 +71,8 @@ class SemanticTracker:
         """
         Generate masks for a sequence of images based on the provided 2D tracks.
         """
-        time_dir_creation = time.time()
         temp_video_dir = create_temp_video_dir(rgb_images)
         # print(f"Temporary video directory created in {time.time() - time_dir_creation:.2f} seconds")
-        time_inference_state = time.time()
         inference_state = self.video_predictor.init_state(video_path=temp_video_dir)
         # print(f"Inference state initialized in {time.time() - time_inference_state:.2f} seconds")
 

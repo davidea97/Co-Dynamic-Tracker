@@ -8,7 +8,7 @@ from sam2_tracker import Sam2Tracker
 from tracker.dynamic_tracker import DynamicTracker
 from tracker.dynamic_online_tracking import BatchOnlineDynamicTracker
 
-from tracker.utils.general_utils import extract_image_files, extract_poses
+from tracker.utils.general_utils import extract_image_files, extract_poses, str2bool
 
 
 def main(experiments_path, grid_size, intrinsics, search_window_len=8, track_window_len=8, checkpoint="scaled_online.pth"):
@@ -22,7 +22,7 @@ def main(experiments_path, grid_size, intrinsics, search_window_len=8, track_win
     camera_poses = extract_poses(poses_path) if poses_path else []
 
     start_tracking_time = time.time()
-    tracker = BatchOnlineDynamicTracker(intrinsics, grid_size=grid_size, checkpoint=checkpoint, search_window_len=search_window_len, track_window_len=track_window_len)
+    tracker = BatchOnlineDynamicTracker(intrinsics, grid_size=grid_size, checkpoint=checkpoint, search_window_len=search_window_len, track_window_len=track_window_len, verbose=args.verbose)
 
     print("Start tracking...")
     tracker.batch_dynamic_tracking(rgb_images, depth_images, camera_poses)
@@ -38,7 +38,8 @@ if __name__ == "__main__":
     parser.add_argument("--track_window_len", type=int, default=1, help="Length of the track window")
     parser.add_argument("--experiments_path", type=str, default="/home/allegro/davide_ws/habitat-lab/FisherRF-active-mapping/experiments/GaussianSLAM/Eudora-results/gibson/", help="Path to the experiments folder")
     parser.add_argument("--checkpoint", type=str, default="/home/allegro/davide_ws/co-tracker/checkpoints/scaled_online.pth", help="Path to the checkpoint file")
-    
+    parser.add_argument("--verbose", type=str2bool, help="Enable verbose output")
+
     args = parser.parse_args()
     intrinsics = np.array([[128, 0, 128],
                             [0, 128, 128],

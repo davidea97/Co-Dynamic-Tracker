@@ -91,33 +91,12 @@ class TrackerUtils:
                 src_masks, src_colors = self.compute_3D_from_mask(rgb[t], masks[t], depths[t], poses[t])
                 tgt_masks, tgt_colors = self.compute_3D_from_mask(rgb[t+1], masks[t+1], depths[t+1], poses[t+1])
                 
-                # src_dict = {id: pt for id, pt in refined_3d_points[t]}
-                # tgt_dict = {id: pt for id, pt in refined_3d_points[t + 1]} 
-
-                # common_ids = set(src_dict.keys()) & set(tgt_dict.keys())
-
-                # src_points = np.array([src_dict[i] for i in common_ids])
-                # tgt_points = np.array([tgt_dict[i] for i in common_ids])
-
-                # if len(src_points) < 5 or len(tgt_points) < 5:
-                #     continue
-                
-                # print("ICP Transformation:")
                 T_rel, fitness = self.estimate_icp_transform(src_masks, tgt_masks)
                 T_rel_inv = np.linalg.inv(T_rel)
-                # print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
-                # print(T_rel)
-                # print("Ransasc Transformation:")
-                # T_rel_ransac, fitness = self.estimate_ransac_se3(src_points, tgt_points)
-                # T_rel_ransac_inv = np.linalg.inv(T_rel_ransac)
-                # print(f"Frame {t}->{t+1} | Fitness: {fitness:.3f}")
-                # print(T_rel_ransac)
 
                 accumulated_T = accumulated_T @ T_rel_inv 
-                # accumulated_T = accumulated_T @ T_rel_ransac_inv 
                 tgt_pcd = o3d.geometry.PointCloud()
 
-                
                 tgt_pcd.points = o3d.utility.Vector3dVector(tgt_masks)
                 tgt_pcd.colors = o3d.utility.Vector3dVector(tgt_colors)
                 tgt_pcd.transform(accumulated_T)
@@ -136,7 +115,6 @@ class TrackerUtils:
         else:   
             output_path = os.path.join(output_dir, f"merged_frame_complete.ply")
         o3d.io.write_point_cloud(output_path, merged_pcd)
-        # o3d.visualization.draw_geometries([merged_pcd])
 
     def visualize_tracks(self, track_3d, output_dir="pcl_test", window_counter=0):
         all_points = []
