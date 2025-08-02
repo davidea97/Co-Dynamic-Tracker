@@ -270,7 +270,7 @@ class BatchOnlineDynamicTracker():
             dynamic_idx_frame = [entry[0] for entry in per_frame_raw_dynamic[t]]
             dynamic_pts_frame = [entry[1] for entry in per_frame_raw_dynamic[t]]
             # Keep dynamic points only if they are more than the 1% of the total number of points
-            if len(dynamic_idx_frame) > 0.01 * self.grid_size**2:
+            if (len(dynamic_idx_frame) > 0.01 * self.grid_size**2) or (len(dynamic_idx_frame) <= 0.01 * self.grid_size**2 and len(dynamic_idx_frame) > 0 and tracking_step):
                 init_3d_points[t] = list(zip(dynamic_idx_frame, dynamic_pts_frame))
             
                 for n in dynamic_idx_frame:
@@ -282,6 +282,8 @@ class BatchOnlineDynamicTracker():
                 init_2d_points[t] = [
                     (track_id, point2D) for (track_id, point2D) in zip([id for (id, _) in refined_with_ids], points2D)
                 ]
+
+            # If no dynamic points are available, we return empty lists
             else:
                 init_3d_points[t] = []
                 init_2d_points[t] = []
@@ -648,7 +650,7 @@ class BatchOnlineDynamicTracker():
         # saving_time = time.time()
         if self.verbose:
             # save_init_dynamic_estimation(window_rgb_images, pred_2d_tracks, pred_3d_dynamic_tracks, pred_3d_static_tracks, output_dir="output_init_visualization", window_counter=window_counter, window_len=self.window_len_search)
-            save_refined_dynamic_visualization(window_rgb_images, pred_2d_tracks, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len_search=self.window_len_search, window_len_track=self.window_len_track, tracking_step=False, idx=idx)
+            save_refined_dynamic_visualization(window_rgb_images, pred_2d_tracks, pred_visibility, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len_search=self.window_len_search, window_len_track=self.window_len_track, tracking_step=False, idx=idx)
         
         # MEMORY BANK: let's keep only the last frame's refined points
         # Queries correspond to the dynamic points in the last frame of the window
@@ -656,7 +658,7 @@ class BatchOnlineDynamicTracker():
         
         final_masks = self.mask_generation(window_rgb_images, refined_2d_points_no_ids[0], window_counter)
         # If the queries are None or the number of queries is less than the threshold, we generate masks and we will proceed with the search
-        if (queries_tensor is None or len(queries_tensor[0]) < self.query_threshold):
+        if (queries_tensor is None or len(queries_tensor[0]) <= self.query_threshold):
             self.dynamic_tracking_mode = False
         else:
             self.dynamic_tracking_mode = True
@@ -683,12 +685,17 @@ class BatchOnlineDynamicTracker():
         refined_2d_points, refined_3d_points, refined_2d_points_no_ids = self.refine_dynamic_points(pred_2d_tracks, pred_3d_tracks, tracking_step=True)
 
         if self.verbose:
-            save_refined_dynamic_visualization(window_rgb_images, pred_2d_tracks, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len_search=self.window_len_search, window_len_track=self.window_len_track, tracking_step=True, idx=idx)
+            save_refined_dynamic_visualization(window_rgb_images, pred_2d_tracks, pred_visibility, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len_search=self.window_len_search, window_len_track=self.window_len_track, tracking_step=True, idx=idx)
         
         # MEMORY BANK: let's keep only the last frame's refined points
         queries_tensor = self.queries_for_next_window(window_rgb_images, refined_2d_points_no_ids)
         final_masks = [None] * len(window_rgb_images)
         
+        if len(refined_2d_points_no_ids[self.window_len_track-1]) <= self.query_threshold:
+            self.dynamic_tracking_mode = False
+        else:
+            self.dynamic_tracking_mode = True
+
         return pred_2d_tracks, pred_visibility, pred_3d_tracks, queries_tensor, refined_3d_points, final_masks, refined_2d_points
     
 
@@ -699,14 +706,15 @@ class BatchOnlineDynamicTracker():
         prev_queries = None
         window_counter = 0
         all_final_masks = []
-
+        accumulated_counter = 0 
         for i in tqdm(range(len(rgb_images))):
-            
+            if i ==995:
+                print("Stopping at frame 990 for debugging purposes.")
             idx_end = i
             # Phase 1: window-based dynamic search
             if not self.dynamic_tracking_mode:
                 idx_start = i - self.window_len_search
-                if i % self.window_len_search == 0 and i != 0:
+                if accumulated_counter % self.window_len_search == 0 and accumulated_counter != 0:
                     print("Processing window from frame", idx_start, "to", idx_end-1)
                     # For the search phase, we do not use previous queries
                     pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, final_masks, refined_2d_points_no_ids = self.window_dynamic_search_process(
@@ -723,7 +731,7 @@ class BatchOnlineDynamicTracker():
                     self.global_visibilities.append(pred_visibility[0])
                     self.global_refined_points_3d.append(refined_3d_points)
                     all_final_masks.extend(final_masks)
-                        
+                    accumulated_counter = 0
                     if self.dynamic_tracking_mode:
                         print(f"Dynamic object found at window {window_counter}. Switching to tracking mode.")
                         # Prepare queries for the next window
@@ -756,10 +764,23 @@ class BatchOnlineDynamicTracker():
                 self.global_visibilities.append(pred_visibility[0])
                 self.global_refined_points_3d.append(refined_3d_points)
                 all_final_masks.extend(final_masks)
-
+                accumulated_counter = 0
                 # Qui puoi anche interrompere se non trovi più l’oggetto dinamico per N frame
                 # e ritornare a finestre disgiunte (Fase 1)
             self.window_frames.append(rgb_images[i])
+            accumulated_counter += 1
+        
+        if accumulated_counter > 0:
+            idx_start = len(rgb_images) - accumulated_counter
+            pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, final_masks, refined_2d_points_no_ids = self.window_dynamic_search_process(
+                self.window_frames[idx_start:],
+                depth_images[idx_start:],
+                camera_poses[idx_start:],
+                window_counter=window_counter,
+                queries=None,
+                idx=idx_start
+            )
+
         make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
 
 

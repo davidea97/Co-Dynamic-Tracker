@@ -11,7 +11,7 @@ from tracker.dynamic_online_tracking import BatchOnlineDynamicTracker
 from tracker.utils.general_utils import extract_image_files, extract_poses, str2bool
 
 
-def main(experiments_path, grid_size, intrinsics, search_window_len=8, track_window_len=8, checkpoint="scaled_online.pth", verbose=False):
+def main(experiments_path, grid_size, intrinsics, search_window_len=8, track_window_len=2, checkpoint="scaled_online.pth", verbose=False):
     
     rgb_path = os.path.join(experiments_path, "rgb")
     depth_path = os.path.join(experiments_path, "depth")
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Online Tracker Demo")
     parser.add_argument("--grid_size", type=int, default=15, help="Size of the grid for tracking")
     parser.add_argument("--search_window_len", type=int, default=8, help="Length of the search window")
-    parser.add_argument("--track_window_len", type=int, default=1, help="Length of the track window")
+    parser.add_argument("--track_window_len", type=int, default=2, help="Length of the track window")
     parser.add_argument("--experiments_path", type=str, default="/home/allegro/davide_ws/habitat-lab/FisherRF-active-mapping/experiments/GaussianSLAM/Eudora-results/gibson/", help="Path to the experiments folder")
     parser.add_argument("--checkpoint", type=str, default="/home/allegro/davide_ws/co-tracker/checkpoints/scaled_online.pth", help="Path to the checkpoint file")
     parser.add_argument("--verbose", type=str2bool, default=True, help="Enable verbose output")

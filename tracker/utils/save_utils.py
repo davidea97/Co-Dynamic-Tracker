@@ -50,13 +50,13 @@ def save_init_dynamic_estimation( window_rgb_images, pred_tracks, per_frame_dyna
         cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
 
 
-def save_refined_dynamic_visualization(window_rgb_images, pred_tracks, refined_2d_points, output_dir="output_refined_visualization", window_counter=0, window_len_search=8, window_len_track=2, tracking_step=False, idx=None):
+def save_refined_dynamic_visualization(window_rgb_images, pred_tracks, pred_visibility, refined_2d_points, output_dir="output_refined_visualization", window_counter=0, window_len_search=8, window_len_track=2, tracking_step=False, idx=None):
     """
     Save refined dynamic points visualization.
     """
     os.makedirs(output_dir, exist_ok=True)
     tracks_2d = pred_tracks[0].cpu().numpy()  # [T, N, 2]
-    
+    visibility2d = pred_visibility[0].cpu().numpy()
     if tracking_step:
         # Dynamic point (red)
         t = len(window_rgb_images) - 1
@@ -69,6 +69,8 @@ def save_refined_dynamic_visualization(window_rgb_images, pred_tracks, refined_2
         # Static point (green)
         for n in range(tracks_2d.shape[1]):
             x, y = tracks_2d[t, n]
+            if not visibility2d[t, n]:
+                continue
             if not any(np.allclose([x, y], rp[1], atol=1.5) for rp in refined_pts):
                 cv2.circle(img_out, (int(x), int(y)), 2, (0, 255, 0), -1)  # Verde
 
