@@ -50,18 +50,17 @@ def save_init_dynamic_estimation( window_rgb_images, pred_tracks, per_frame_dyna
         cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
 
 
-def save_refined_dynamic_visualization(window_rgb_images, pred_tracks, refined_2d_points, output_dir="output_refined_visualization", window_counter=0, window_len=8):
+def save_refined_dynamic_visualization(window_rgb_images, pred_tracks, refined_2d_points, output_dir="output_refined_visualization", window_counter=0, window_len_search=8, window_len_track=2, tracking_step=False, idx=None):
     """
     Save refined dynamic points visualization.
     """
     os.makedirs(output_dir, exist_ok=True)
     tracks_2d = pred_tracks[0].cpu().numpy()  # [T, N, 2]
-
-    for t, img in enumerate(window_rgb_images):
-        img_out = img.copy()
-        frame_idx = t
-
+    
+    if tracking_step:
         # Dynamic point (red)
+        t = len(window_rgb_images) - 1
+        img_out = window_rgb_images[-1].copy()
         refined_pts = refined_2d_points[t]
         for _, pt in refined_pts:
             x, y = int(pt[0]), int(pt[1])
@@ -73,5 +72,23 @@ def save_refined_dynamic_visualization(window_rgb_images, pred_tracks, refined_2
             if not any(np.allclose([x, y], rp[1], atol=1.5) for rp in refined_pts):
                 cv2.circle(img_out, (int(x), int(y)), 2, (0, 255, 0), -1)  # Verde
 
-        filename = os.path.join(output_dir, f"frame_{window_counter*window_len + t:04d}.png")
+        filename = os.path.join(output_dir, f"frame_{idx+window_len_track-1:04d}.png")
         cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
+    else:
+        for t, img in enumerate(window_rgb_images):
+            img_out = img.copy()
+
+            # Dynamic point (red)
+            refined_pts = refined_2d_points[t]
+            for _, pt in refined_pts:
+                x, y = int(pt[0]), int(pt[1])
+                cv2.circle(img_out, (x, y), 2, (255, 0, 0), -1)  # Red
+
+            # Static point (green)
+            for n in range(tracks_2d.shape[1]):
+                x, y = tracks_2d[t, n]
+                if not any(np.allclose([x, y], rp[1], atol=1.5) for rp in refined_pts):
+                    cv2.circle(img_out, (int(x), int(y)), 2, (0, 255, 0), -1)  # Verde
+
+            filename = os.path.join(output_dir, f"frame_{idx+ t:04d}.png")
+            cv2.imwrite(filename, cv2.cvtColor(img_out, cv2.COLOR_RGB2BGR))
