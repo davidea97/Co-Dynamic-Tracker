@@ -67,7 +67,7 @@ class SemanticTracker:
 
         return mask_arrays
     
-    def window_mask_generator(self, rgb_images, tracks2d, window_counter, output_dir=None, verbose=True):
+    def window_mask_generator(self, rgb_images, tracks2d, idx=None, output_dir=None, verbose=True):
         """
         Generate masks for a sequence of images based on the provided 2D tracks.
         """
@@ -102,7 +102,7 @@ class SemanticTracker:
 
                 mask_np = mask.astype("uint8") * 255
                 if verbose:
-                    out_path = os.path.join(output_dir, f"mask_frame_{window_counter*self.window_len+image_counter:04d}.png")
+                    out_path = os.path.join(output_dir, f"mask_frame_{idx+image_counter:04d}.png")
                     cv2.imwrite(out_path, mask_np)
             
             mask_arrays[image_counter] = mask.astype(bool)

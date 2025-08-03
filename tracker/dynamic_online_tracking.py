@@ -575,7 +575,7 @@ class BatchOnlineDynamicTracker():
 
         return queries_tensor
     
-    def mask_generation(self, window_rgb_images, init_window_dynamic_point, window_counter):
+    def mask_generation(self, window_rgb_images, init_window_dynamic_point, idx=None):
 
         final_masks = [None] * len(window_rgb_images)
 
@@ -583,7 +583,7 @@ class BatchOnlineDynamicTracker():
             final_masks = self.semantic_tracker.window_mask_generator(
                 rgb_images=window_rgb_images,
                 tracks2d=init_window_dynamic_point,
-                window_counter=window_counter,
+                idx=idx,
                 output_dir="refined_masks_video",
                 verbose=self.verbose
             )
@@ -654,7 +654,7 @@ class BatchOnlineDynamicTracker():
         # Queries correspond to the dynamic points in the last frame of the window
         queries_tensor = self.queries_for_next_window(window_rgb_images, refined_2d_points_no_ids)
         
-        final_masks = self.mask_generation(window_rgb_images, refined_2d_points_no_ids[0], window_counter)
+        final_masks = self.mask_generation(window_rgb_images, refined_2d_points_no_ids[0], idx)
         # If the queries are None or the number of queries is less than the threshold, we generate masks and we will proceed with the search
         if (queries_tensor is None or len(queries_tensor[0]) <= self.query_threshold):
             self.dynamic_tracking_mode = False
@@ -694,27 +694,27 @@ class BatchOnlineDynamicTracker():
         # Queries correspond to the dynamic points in the last frame of the window
         queries_tensor = self.queries_for_next_window(window_rgb_images, refined_2d_points_no_ids)
         
-        final_masks = self.mask_generation(window_rgb_images, refined_2d_points_no_ids[0], window_counter)
+        # final_masks = self.mask_generation(window_rgb_images, refined_2d_points_no_ids[0], window_counter)
         # If the queries are None or the number of queries is less than the threshold, we generate masks and we will proceed with the search
         if (queries_tensor is None or len(queries_tensor[0]) <= self.query_threshold):
             self.dynamic_tracking_mode = False
         else:
             self.dynamic_tracking_mode = True
-        
+            
         # Align the pcl
-        if len(refined_3d_points[0])>0:
-            self.tracker_utils.align_3D_masks(window_rgb_images, final_masks, window_depth_images, window_camera_poses, window_counter, refined_3d_points)
+        # if len(refined_3d_points[0])>0:
+        #     self.tracker_utils.align_3D_masks(window_rgb_images, final_masks, window_depth_images, window_camera_poses, window_counter, refined_3d_points)
         
         # print(f"Mask alignment took {time.time() - mask_alignment_time:.3f} seconds")
-        return pred_2d_tracks, pred_visibility, pred_3d_tracks, queries_tensor, refined_3d_points, final_masks, refined_2d_points_no_ids
+        return pred_2d_tracks, pred_visibility, pred_3d_tracks, queries_tensor, refined_3d_points, refined_2d_points_no_ids
     
 
-    def window_dynamic_tracking_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_counter=0, queries=None, previous_3d_points=None, idx=None):
+    def window_dynamic_tracking_process(self, window_rgb_images, window_depth_images, window_camera_poses, window_counter=0, queries=None, previous_3d_points=None, idx=None, idx_memory=None, previous_2d_points=None):
         
         # Process the window tracks
-        pred_2d_tracks, pred_visibility = self.tracker_process_window(window_rgb_images, queries=queries)
+        pred_2d_tracks, pred_visibility = self.tracker_process_window(window_rgb_images[-self.window_len_track:], queries=queries)
 
-        pred_3d_tracks = self.get_3D_points(window_rgb_images, window_depth_images, window_camera_poses, pred_2d_tracks, pred_visibility, previous_3d_points=previous_3d_points)
+        pred_3d_tracks = self.get_3D_points(window_rgb_images[-self.window_len_track:], window_depth_images, window_camera_poses, pred_2d_tracks, pred_visibility, previous_3d_points=previous_3d_points)
 
         # Get raw dynamic and static points from the 3D tracks
         # pred_3d_dynamic_tracks, _ = self.get_dynamic_3D_points(pred_3d_tracks, window_counter=window_counter)
@@ -723,14 +723,15 @@ class BatchOnlineDynamicTracker():
         refined_2d_points, refined_3d_points, refined_2d_points_no_ids = self.refine_dynamic_points(pred_2d_tracks, pred_3d_tracks, tracking_step=True)
 
         if self.verbose:
-            save_refined_dynamic_visualization(window_rgb_images, pred_2d_tracks, pred_visibility, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len_search=self.window_len_search, window_len_track=self.window_len_track, tracking_step=True, idx=idx)
+            save_refined_dynamic_visualization(window_rgb_images[-self.window_len_track:], pred_2d_tracks, pred_visibility, refined_2d_points, output_dir="output_refined_visualization", window_counter=window_counter, window_len_search=self.window_len_search, window_len_track=self.window_len_track, tracking_step=True, idx=idx)
         
         # MEMORY BANK: let's keep only the last frame's refined points
-        queries_tensor = self.queries_for_next_window(window_rgb_images, refined_2d_points_no_ids)
-        final_masks = [None] * len(window_rgb_images)
-        
+        queries_tensor = self.queries_for_next_window(window_rgb_images[-self.window_len_track:], refined_2d_points_no_ids)
+        final_masks = [None] * len(window_rgb_images[-self.window_len_track:])
+
         if len(refined_2d_points_no_ids[self.window_len_track-1]) <= self.query_threshold:
             self.dynamic_tracking_mode = False
+            final_masks = self.mask_generation(window_rgb_images, previous_2d_points[0], idx=idx_memory)
         else:
             self.dynamic_tracking_mode = True
 
@@ -746,8 +747,6 @@ class BatchOnlineDynamicTracker():
         all_final_masks = []
         accumulated_counter = 0 
         for i in tqdm(range(len(rgb_images))):
-            if i ==995:
-                print("Stopping at frame 990 for debugging purposes.")
             idx_end = i
             # Phase 1: window-based dynamic search
             if not self.dynamic_tracking_mode:
@@ -755,7 +754,7 @@ class BatchOnlineDynamicTracker():
                 if accumulated_counter % self.window_len_search == 0 and accumulated_counter != 0:
                     print("Processing window from frame", idx_start, "to", idx_end-1)
                     # For the search phase, we do not use previous queries
-                    pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, final_masks, refined_2d_points_no_ids = self.window_dynamic_search_process(
+                    pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, refined_2d_points_no_ids = self.window_dynamic_search_process(
                         self.window_frames[idx_start:idx_end],
                         depth_images[idx_start:idx_end],
                         camera_poses[idx_start:idx_end],
@@ -768,7 +767,7 @@ class BatchOnlineDynamicTracker():
                     self.global_tracks.append(pred_tracks[0])
                     self.global_visibilities.append(pred_visibility[0])
                     self.global_refined_points_3d.append(refined_3d_points)
-                    all_final_masks.extend(final_masks)
+                    # all_final_masks.extend(final_masks)
                     accumulated_counter = 0
                     if self.dynamic_tracking_mode:
                         # print(f"Dynamic object found at window {window_counter}. Switching to tracking mode.")
@@ -777,22 +776,25 @@ class BatchOnlineDynamicTracker():
                         # Store the last refined 3D points for the next window
                         temp_refined_points_3d = {k: v for k, v in refined_3d_points.items() if k == self.window_len_search-1}
                         self.refined_previous_3d_points = {new_k: v for new_k, (_, v) in enumerate(temp_refined_points_3d.items())}
-
+                        self.idx = idx_start
                         self.refined_previous_2d_points = refined_2d_points_no_ids
 
             # Phase 2: frame-by-frame dynamic tracking
             else:
                 # The tracked points start from the frame i - window_len_track - 1
                 idx_start = i - self.window_len_track
-                print("Processing window from frame", idx_start, "to", idx_end-1)
+                idx_memory = self.idx
+                print("Processing window from frame", i - self.window_len_track, "to", idx_end-1)
                 pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, final_masks, _ = self.window_dynamic_tracking_process(
-                    self.window_frames[idx_start:idx_end],
+                    self.window_frames[idx_memory:idx_end],
                     depth_images[idx_start:idx_end],
                     camera_poses[idx_start:idx_end],
                     window_counter=window_counter,
                     queries=self.prev_query_tensor,
                     previous_3d_points=self.refined_previous_3d_points,
-                    idx=idx_start
+                    idx=idx_start,
+                    idx_memory=idx_memory,
+                    previous_2d_points=self.refined_previous_2d_points
                 )
 
                 window_counter += 1
@@ -801,7 +803,7 @@ class BatchOnlineDynamicTracker():
                 self.global_tracks.append(pred_tracks[0])
                 self.global_visibilities.append(pred_visibility[0])
                 self.global_refined_points_3d.append(refined_3d_points)
-                all_final_masks.extend(final_masks)
+                # all_final_masks.extend(final_masks)
                 accumulated_counter = 0
 
             self.window_frames.append(rgb_images[i])
@@ -809,7 +811,7 @@ class BatchOnlineDynamicTracker():
         
         if accumulated_counter > 0:
             idx_start = len(rgb_images) - accumulated_counter
-            pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, final_masks, refined_2d_points_no_ids = self.window_dynamic_search_process(
+            pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, refined_2d_points_no_ids = self.window_dynamic_search_process(
                 self.window_frames[idx_start:],
                 depth_images[idx_start:],
                 camera_poses[idx_start:],
@@ -861,7 +863,7 @@ class BatchOnlineDynamicTracker():
             queries=None,
             idx=idx_start
         )
-        all_final_masks.extend(final_masks)
+        # all_final_masks.extend(final_masks)
 
         window_counter += 1
 
@@ -872,6 +874,5 @@ class BatchOnlineDynamicTracker():
         # self.tracker_utils.align_3D_masks(rgb_images, all_final_masks, depth_images, camera_poses)
 
         if self.verbose:
-            make_video_from_frames("output_init_visualization", "init_full_video.mp4")
             make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
 
