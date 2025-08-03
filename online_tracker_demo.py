@@ -25,8 +25,8 @@ def main(experiments_path, grid_size, intrinsics, search_window_len=8, track_win
     tracker = BatchOnlineDynamicTracker(intrinsics, grid_size=grid_size, checkpoint=checkpoint, search_window_len=search_window_len, track_window_len=track_window_len, verbose=verbose)
 
     print("Start tracking...")
-    # tracker.batch_dynamic_tracking(rgb_images, depth_images, camera_poses)
-    tracker.online_search_and_dynamic_tracking(rgb_images, depth_images, camera_poses)
+    tracker.batch_dynamic_tracking(rgb_images, depth_images, camera_poses)
+    # tracker.online_search_and_dynamic_tracking(rgb_images, depth_images, camera_poses)
     print(f"Tracking time: {time.time() - start_tracking_time} seconds")
 
 # Main function
