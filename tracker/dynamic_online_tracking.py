@@ -744,7 +744,6 @@ class BatchOnlineDynamicTracker():
         self.window_frames = []
         prev_queries = None
         window_counter = 0
-        all_final_masks = []
         accumulated_counter = 0 
         for i in tqdm(range(len(rgb_images))):
             idx_end = i
@@ -752,7 +751,7 @@ class BatchOnlineDynamicTracker():
             if not self.dynamic_tracking_mode:
                 idx_start = i - self.window_len_search
                 if accumulated_counter % self.window_len_search == 0 and accumulated_counter != 0:
-                    print("Processing window from frame", idx_start, "to", idx_end-1)
+                    # print("Processing window from frame", idx_start, "to", idx_end-1)
                     # For the search phase, we do not use previous queries
                     pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, refined_2d_points_no_ids = self.window_dynamic_search_process(
                         self.window_frames[idx_start:idx_end],
@@ -784,7 +783,7 @@ class BatchOnlineDynamicTracker():
                 # The tracked points start from the frame i - window_len_track - 1
                 idx_start = i - self.window_len_track
                 idx_memory = self.idx
-                print("Processing window from frame", i - self.window_len_track, "to", idx_end-1)
+                # print("Processing window from frame", i - self.window_len_track, "to", idx_end-1)
                 pred_tracks, pred_visibility, _, prev_queries, refined_3d_points, final_masks, _ = self.window_dynamic_tracking_process(
                     self.window_frames[idx_memory:idx_end],
                     depth_images[idx_start:idx_end],
@@ -820,7 +819,7 @@ class BatchOnlineDynamicTracker():
                 idx=idx_start
             )
 
-        make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
+        # make_video_from_frames("output_refined_visualization", "refined_full_video.mp4")
 
 
 
